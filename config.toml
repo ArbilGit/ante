@@ -13,12 +13,15 @@ pygmentsCodeFences = true
 newContentEditor = "vim"
 
 [params]
-  description = "A systems programming language focused on providing extreme extensibility without compromising on speed or readability"
+  description = "The natural way to program something should be both easy and lead to efficient code."
   author = "jfecher"
   defaultKeywords = ["ante", "programming", "language", "antelang", "lang"]
   style = "red"
   date_format = ""
 
+[markup]
+  [markup.highlight]
+    guessSyntax = true
 
 [menu]
 

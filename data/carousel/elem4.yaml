@@ -1,21 +1,16 @@
 weight: 4
-title: "Integrated Build System"
+title: "Refinement Types"
 description: >
-    <div class="highlight-textalign-left"><pre><span class="c1">//build system is implemented as a library
+    <div class="highlight-textalign-left"><pre><code class="language/ante" data-lang="ante"><span class="k">given</span> len v1 == len v2
 
-    //with no syntax changes to the language itself</span>
+    <span class="nf">dotproduct</span> (v1:<span class="kt"> Array u64</span>) (v2:<span class="kt"> Array u64</span>) -> <span class="kt">u64</span> =
+        ret = <span class="k">mut</span> <span class="m">0</span>
+        <span class="k">for</span> i <span class="k">in</span> indices v1 <span class="k">do</span>
+            <span class="c1">// Array access is done with '#' in ante</span>
+            ret += v1#i * v2#i
+        ret
 
-    <span class="k">import</span> <span class="kt">Build</span>, <span class="kt">File</span>
 
+    <span class="nf">dotproduct</span> [<span class="m">1</span>, <span class="m">2</span>, <span class="m">3</span>] [<span class="m">4</span>, <span class="m">5</span>, <span class="m">6</span>]   <span class="c1">//=> 22</span>
 
-    default_target <span class="s">"program"</span>
-
-
-    target <span class="s">"program"</span> =>
-        depend_on <span class="s">"legacy_cpp"</span>
-        compile <span class="s">"driver.an"</span>
-
-    target <span class="s">"legacy_cpp"</span> =>
-        cppfiles = glob <span class="s">"*.cpp"</span>
-        map cppfiles cxx
-        link_with cppfiles</span></code></pre></div>
+    <span class="nf">dotproduct</span> [<span class="m">1</span>, <span class="m">2</span>, <span class="m">3</span>] [<span class="m">4</span>, <span class="m">5</span>]      <span class="c1">//error, lengths aren't equal!</span></code></pre></div>

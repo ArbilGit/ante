@@ -1,4 +1,5 @@
 weight: 6
 name: "Gradual Memory Management"
 icon: "fa fa-trash"
-description: "To support the largest variety of applications, Ante provides several different methods of memory management, including manual management.  Don't want to bother with any of it?  Simply `import GC` to use a garbage collector."
+description: "To support the largest variety of applications, Ante provides several different methods of memory management, including reference-counted and unique ownership. These are provided in addition to the default region-inference scheme which uses arena allocation internally."
+link: "docs/language/#lifetime-inference"

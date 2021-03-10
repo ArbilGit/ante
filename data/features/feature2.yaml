@@ -1,5 +1,5 @@
 weight: 2
-name: "Extensible"
+name: "Expressive"
 icon: "fa fa-chevron-right"
-description: "A compile-time API for the compiler enables the creation of compiler extensions within the program itself.  This enables anything from creating new optimization passes to extending the type system with dependent types."
-link: "docs/modifiers"
+description: "Idiomatic code is terse and expressive. Common patterns like error handling have sugar in the form of the ? and ! operators which enable readable code where errors are still explicit."
+link: "docs/language/#try-and"

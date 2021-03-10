@@ -2,4 +2,4 @@ weight: 1
 name: "Refinement Types"
 icon: "fa fa-bug"
 description: "Ante's type system can prevent entire classes of bugs so you can catch them before ever running your program.  For example, out of bounds array indices are a compile-time error."
-link: "docs/types"
+link: "docs/language/#refinement-types"

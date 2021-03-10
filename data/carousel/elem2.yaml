@@ -1,12 +1,16 @@
 weight: 2
-title: "Refinement Types"
+title: "Iterators"
 description: >
-    <div class="highlight-textalign-left"><pre><code class="language/ante" data-lang="ante"><span class="nf">dotproduct</span> (v1:<span class="kt">Arr u64</span>) (v2:<span class="kt">Arr u64</span>) -> <span class="kt">u64</span> <span class="k">given</span> len v1 == len v2 =
-        ret = <span class="k">mut</span> <span class="m">0</span>
-        <span class="k">for</span> i <span class="k">in</span> indices v1 <span class="k">do</span>
-            ret += v1#i * v2#i
-        ret
+    <div class="highlight-textalign-left"><pre><span class="k">given</span> <span class="kt">Iterable a string</span>
 
-    <span class="nf">dotproduct</span> [<span class="m">1</span>, <span class="m">2</span>, <span class="m">3</span>] [<span class="m">4</span>, <span class="m">5</span>, <span class="m">6</span>]   <span class="c1">//=> 22</span>
+    parse_csv (text: <span class="kt">a</span>) -> <span class="kt">Vec</span> (<span class="kt">Vec string</span>) =
+        lines text
+        |> skip <span class="m">1</span>
+        |> map (split _ <span class="s">","</span>)
+        |> collect
 
-    <span class="nf">dotproduct</span> [<span class="m">1</span>, <span class="m">2</span>, <span class="m">3</span>] [<span class="m">4</span>, <span class="m">5</span>]      <span class="c1">//error, lengths aren't equal!</span></code></pre></div>
+    csv1 = parse_csv (<span class="kt">File</span>.open<span class="k">!</span> <span class="s">"input.csv"</span>)
+
+    csv2 = parse_csv <span class="s">"a,b,c\n1,2,3\n4,5,6"</span>
+
+    </code></pre></div>

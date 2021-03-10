@@ -2,4 +2,3 @@ weight: 5
 name: "High & Low Level language"
 icon: "fa fa-code"
 description: "Ante hosts a variety of high-level solutions such as smart pointers and first-class functions but also provides the ability to interact at a lower level if needed."
-link: "docs/functions"

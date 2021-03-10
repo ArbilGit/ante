@@ -3,13 +3,8 @@ title: "Factorial"
 description: >
     <div class="highlight-textalign-left"><pre><code class="language/ante" data-lang="ante"><span class="nf">fact</span> x =
         <span class="k">if</span> x == <span class="m">0</span> <span class="k">then</span> <span class="m">1</span>
-        <span class="k">else</span> x * <span class="nf">fact</span> (x-1)
+        <span class="k">else</span> x * <span class="nf">fact</span> (x - 1)
 
-    <span class="c1">//or with pattern matching:</span>
+    print (fact <span class="m">5</span>)      <span class="c1">//=> 120</span>
 
-    <span class="nf">fact_alt</span> <span class="m">0</span> = <span class="m">1</span>
-           | x = x * <span class="nf">fact_alt</span> (x-1)
-
-    <span class="nf">fact</span> <span class="m">5</span>      <span class="c1">//=> 120</span>
-
-    <span class="nf">fact_alt</span> <span class="m">5</span>  <span class="c1">//=> 120</span></code></pre></div>
+    </code></pre></div>

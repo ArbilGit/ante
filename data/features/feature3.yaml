@@ -2,4 +2,4 @@ weight: 3
 name: "Robust Module System"
 icon: "fa fa-cube"
 description: "Modules provide an easy way to manage multiple files and reason about large systems.  They also enable faster compilation through caching."
-link: "docs/modules"
+link: "docs/language/#modules"

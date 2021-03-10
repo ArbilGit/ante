@@ -1,26 +1,18 @@
 weight: 6
 title: "C and C++ ffi"
 description: >
-    <div class="highlight-textalign-left"><pre><code class="language/ante" data-lang="ante" style="float: left; padding-right: 20px;"><span class="c1">//in file.hpp</span>
+    <div class="highlight-textalign-left"><pre><code class="language/ante" data-lang="ante"><span class="c1">// In driver.an</span>
 
-    <span class="k">struct</span> <span class="kt">Triple</span> {
-        <span class="kt">int</span> first, second, third;
+    <span class="c1">// Call clang api to parse file and import functions</span>
 
-        <span class="kt">Triple</span>(<span class="kt">int</span> a, <span class="kt">int</span> b, <span class="kt">int</span> c) :
-            first(a), second(b), third(c){}
+    <span class="k">import</span> <span class="kt">Cpp</span> <span class="s">"triple.hpp"</span>
 
-        <span class="kt">int</span> <span class="nf">firstPlus</span>(<span class="kt">int</span> d) <span class="kt">const</span> {
-            <span class="k">return</span> first + d;
-        }
-    };
-    </code
 
-    <code class="language/ante" data-lang="ante"><span class="c1">//in driver.an</span>
+    <span class="c1">// Or declare an external function to be linked in from elsewhere</span>
 
-    <span class="c1">//call clang api to parse file and import functions</span>
+    <span class="k">extern</span> printf : (<span class="kt">ref char</span>) ... -> <span class="kt">i32</span>
 
-    <span class="k">import</span> <span class="kt">Cpp</span> <span class="s">"file.hpp"</span>
 
-    t = <span class="kt">Triple</span>(<span class="m">1</span>, <span class="m">2</span>, <span class="m">3</span>)
+    t = <span class="kt">Triple</span> <span class="m">1 2 3</span>
 
-    t.<span class="nf">firstPlus</span> t.third  <span class="c1">//=> 4</span></code></pre></div>
+    printf (<span class="s">"%d\n"</span>.c_string) (t.firstPlus t.third) <span class="c1">//=> 4</span></code></pre></div>

@@ -19,3 +19,4 @@ include/yyparser.h
 /src/stack.hh
 /t.exe
 public
+hugo

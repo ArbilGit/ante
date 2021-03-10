@@ -2,4 +2,4 @@ weight: 4
 name: "Integrated Build System"
 icon: "fa fa-cubes"
 description: "Build instructions can be specified within the source code itself, no makefile needed.  Additionally, no special syntax is required as it is implemented as a normal library module using Ante's compile-time API."
-link: "lib/build"
+link: "docs/language/#modules"
