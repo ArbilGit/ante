@@ -1,0 +1,17 @@
+
+foo () =
+    (new 1, new 2)
+
+bar () =
+    (one, _two) = foo ()
+    one
+
+one = bar ()
+
+// args: --check --show-lifetimes
+// expected stdout:
+// (foo = (\ () . ((new 1 in r1), (new 2 in r2))));
+// (bar = (\ () .
+//     (letregion r2 in ((one, two) = (foo ())));
+//     one));
+// (letregion r1 in (one = (bar ())))

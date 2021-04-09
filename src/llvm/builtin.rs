@@ -14,7 +14,7 @@ use inkwell::values::{ BasicValue, BasicValueEnum, IntValue, FloatValue };
 use inkwell::{ IntPredicate, FloatPredicate };
 use inkwell::attributes::{ Attribute, AttributeLoc };
 
-pub fn call_builtin<'g, 'c>(args: &[Ast<'c>], generator: &mut Generator<'g>) -> BasicValueEnum<'g> {
+pub fn call_builtin<'g, 'c>(args: &[&mut Ast<'c>], generator: &mut Generator<'g>) -> BasicValueEnum<'g> {
     assert!(args.len() == 1);
     
     let arg = match &args[0] {

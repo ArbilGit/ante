@@ -1,0 +1,11 @@
+
+type List a =
+   | Cons a (ref Node a)
+   | Nil
+
+foo () -> List i32 =
+    last = &Nil
+    tail = &Cons 2 last
+    Cons 1 tail
+
+// args: --check --show-lifetimes

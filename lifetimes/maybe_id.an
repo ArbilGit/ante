@@ -1,0 +1,17 @@
+maybe_id x =
+    if true then x else new 4
+
+foo () =
+    x = new 7
+    y = maybe_id x
+    print x
+    y
+
+// args: --check --show-lifetimes
+// expected stdout:
+// (maybe_id = \ x . (if (rand ()) then x else (new 4 in r1)))
+// (foo = (\ () .
+//     (x = (new 7 in r1));
+//     (y = (maybe_id x));
+//     (print x);
+//     y))

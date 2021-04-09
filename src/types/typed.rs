@@ -1,6 +1,7 @@
 //! typed.rs - Defines a simple trait for getting and setting
 //! the type of something. Currently this is only implemented for
 //! AST nodes.
+use crate::cache::ModuleCache;
 use crate::types::Type;
 use crate::parser::ast::*;
 
@@ -16,6 +17,16 @@ impl<'a> Typed for Ast<'a> {
 
     fn set_type(&mut self, typ: Type) {
         dispatch_on_expr!(self, Typed::set_type, typ)
+    }
+}
+
+impl<'a> Typed for (AstId, &mut ModuleCache<'a>) {
+    fn get_type(&self) -> Option<&Type> {
+        self.1.get_node(self.0).get_type()
+    }
+
+    fn set_type(&mut self, typ: Type) {
+        self.1.get_node(self.0).set_type(typ)
     }
 }
 

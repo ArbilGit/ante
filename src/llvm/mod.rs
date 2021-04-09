@@ -21,7 +21,7 @@
 use crate::cache::{ ModuleCache, DefinitionInfoId, DefinitionKind, VariableId };
 use crate::nameresolution::builtin::BUILTIN_ID;
 use crate::lexer::token::IntegerKind;
-use crate::parser::{ ast, ast::Ast };
+use crate::parser::{ ast, ast::Ast, ast::AstId };
 use crate::types::{ self, TypeVariableId, TypeBinding, TypeInfoId, DEFAULT_INTEGER_TYPE };
 use crate::types::typechecker::{ self, TypeBindings };
 use crate::types::traits::RequiredImpl;
@@ -737,8 +737,10 @@ impl<'g> Generator<'g> {
         }
     }
 
-    fn bind_irrefutable_pattern<'c>(&mut self, ast: &Ast<'c>, mut value: BasicValueEnum<'g>, cache: &mut ModuleCache<'c>) {
+    fn bind_irrefutable_pattern<'c>(&mut self, ast_id: AstId, mut value: BasicValueEnum<'g>, cache: &mut ModuleCache<'c>) {
         use { ast::LiteralKind, Ast::* };
+        let ast = cache.get_node(ast_id);
+
         match ast {
             Literal(literal) => {
                 assert!(literal.kind == LiteralKind::Unit)
@@ -759,13 +761,13 @@ impl<'g> Generator<'g> {
                 self.definitions.insert((id, typ), value);
             },
             TypeAnnotation(annotation) => {
-                self.bind_irrefutable_pattern(annotation.lhs.as_ref(), value, cache);
+                self.bind_irrefutable_pattern(annotation.lhs, value, cache);
             },
             // Match a pair pattern
-            FunctionCall(call) if call.is_pair_constructor() => {
+            FunctionCall(call) if call.is_pair_constructor(cache) => {
                 for (i, element) in call.args.iter().enumerate() {
                     let element_value = self.builder.build_extract_value(value.into_struct_value(), i as u32, "extract").unwrap();
-                    self.bind_irrefutable_pattern(element, element_value, cache);
+                    self.bind_irrefutable_pattern(*element, element_value, cache);
                 }
             },
             _ => {
@@ -785,11 +787,19 @@ impl<'g> Generator<'g> {
     // a definition like `(a, b) = ...` where the value returned by the definition is not actually
     // the value of a. Since this function will bind each pattern the correct value, callers only
     // need to retrieve this value from self.definitions themselves.
-    fn codegen_monomorphise<'c>(&mut self, definition: &ast::Definition<'c>, cache: &mut ModuleCache<'c>) {
+    fn codegen_monomorphise<'c>(&mut self, definition_node_id: AstId, cache: &mut ModuleCache<'c>) {
         // If we're defining a lambda, give the lambda info on DefinitionInfoId so that it knows
         // what to name itself in the IR and so recursive functions can properly codegen without
         // attempting to re-compile themselves over and over.
-        match (definition.pattern.as_ref(), definition.expr.as_ref()) {
+        let definition = match cache.get_node(definition_node_id) {
+            Ast::Definition(definition) => definition,
+            _ => unreachable!("codegen_monomorphise called with a non-definition node"),
+        };
+
+        let pattern = cache.get_node(definition.pattern);
+        let expr = cache.get_node(definition.expr);
+
+        match (pattern, expr) {
             (Ast::Variable(variable), Ast::Lambda(_)) => {
                 self.current_function_info = Some(variable.definition.unwrap());
             }
@@ -797,7 +807,7 @@ impl<'g> Generator<'g> {
         }
 
         let value = definition.expr.codegen(self, cache);
-        self.bind_irrefutable_pattern(definition.pattern.as_ref(), value, cache);
+        self.bind_irrefutable_pattern(definition.pattern, value, cache);
     }
 
     // Is this a (possibly generalized) function type?
@@ -905,9 +915,10 @@ impl<'g> Generator<'g> {
     /// Since returns can happen within a branch, this function should be used to
     /// check that the branch hasn't yet terminated before inserting a br after
     /// a then/else branch, pattern match, or looping construct.
-    fn codegen_branch<'c>(&mut self, branch: &ast::Ast<'c>, end_block: BasicBlock<'g>,
+    fn codegen_branch<'c>(&mut self, branch_id: ast::AstId, end_block: BasicBlock<'g>,
         cache: &mut ModuleCache<'c>) -> Option<(BasicBlock<'g>, BasicValueEnum<'g>)>
     {
+        let branch = cache.get_node(branch_id);
         let branch_value = branch.codegen(self, cache);
         let branch_block = self.current_block();
 
@@ -1052,6 +1063,12 @@ impl<'g, 'c> CodeGen<'g, 'c> for Ast<'c> {
     }
 }
 
+impl<'g, 'c> CodeGen<'g, 'c> for AstId {
+    fn codegen(&self, generator: &mut Generator<'g>, cache: &mut ModuleCache<'c>) -> BasicValueEnum<'g> {
+        cache.get_node(*self).codegen(generator, cache)
+    }
+}
+
 impl<'g, 'c> CodeGen<'g, 'c> for ast::Literal<'c> {
     fn codegen(&self, generator: &mut Generator<'g>, cache: &mut ModuleCache<'c>) -> BasicValueEnum<'g> {
         self.kind.codegen(generator, cache)
@@ -1084,7 +1101,7 @@ impl<'g, 'c> CodeGen<'g, 'c> for ast::Variable<'c> {
         generator.remove_required_impls(&required_impls);
 
         if generator.auto_derefs.contains(&id) {
-            value = generator.builder.build_load(value.into_pointer_value(), &self.to_string());
+            value = generator.builder.build_load(value.into_pointer_value(), &self.name());
         }
 
         value
@@ -1105,7 +1122,7 @@ impl<'g, 'c> CodeGen<'g, 'c> for ast::Lambda<'c> {
         // Bind each parameter node to the nth parameter of `function`
         for (i, parameter) in self.args.iter().enumerate() {
             let value = function.get_nth_param(i as u32).unwrap();
-            generator.bind_irrefutable_pattern(parameter, value, cache);
+            generator.bind_irrefutable_pattern(*parameter, value, cache);
         }
 
         let return_value = self.body.codegen(generator, cache);
@@ -1119,11 +1136,12 @@ impl<'g, 'c> CodeGen<'g, 'c> for ast::Lambda<'c> {
 
 impl<'g, 'c> CodeGen<'g, 'c> for ast::FunctionCall<'c> {
     fn codegen(&self, generator: &mut Generator<'g>, cache: &mut ModuleCache<'c>) -> BasicValueEnum<'g> {
-        match self.function.as_ref() {
+        match cache.get_node(self.function) {
             Ast::Variable(variable) if variable.definition == Some(BUILTIN_ID) => {
                 // TODO: improve this control flow so that the fast path of normal function calls
                 // doesn't have to check the rare case of a builtin function call.
-                builtin::call_builtin(&self.args, generator)
+                let args = fmap(&self.args, |arg| cache.get_node(*arg));
+                builtin::call_builtin(args.as_slice(), generator)
             },
             _ => {
                 // TODO: Code smell: args currently must be compiled before the function in case
@@ -1142,14 +1160,14 @@ impl<'g, 'c> CodeGen<'g, 'c> for ast::FunctionCall<'c> {
 
 impl<'g, 'c> CodeGen<'g, 'c> for ast::Definition<'c> {
     fn codegen(&self, generator: &mut Generator<'g>, cache: &mut ModuleCache<'c>) -> BasicValueEnum<'g> {
-        match self.expr.as_ref() {
+        match cache.get_node(self.expr) {
             // If the value is a function we can skip it and come back later to only compile it
             // when it is actually used. This saves the optimizer some work since we won't ever
             // have to search for and remove unused functions.
             Ast::Lambda(_) => (),
-            _ => {
-                let value = self.expr.codegen(generator, cache);
-                generator.bind_irrefutable_pattern(self.pattern.as_ref(), value, cache);
+            normal_rhs => {
+                let value = normal_rhs.codegen(generator, cache);
+                generator.bind_irrefutable_pattern(self.pattern, value, cache);
             },
         }
         generator.unit_value()
@@ -1164,13 +1182,13 @@ impl<'g, 'c> CodeGen<'g, 'c> for ast::If<'c> {
         let then_block = generator.context.append_basic_block(current_function, "then");
         let end_block = generator.context.append_basic_block(current_function, "end_if");
 
-        if let Some(otherwise) = &self.otherwise {
+        if let Some(otherwise) = self.otherwise {
             // Setup conditional jump
             let else_block = generator.context.append_basic_block(current_function, "else");
             generator.builder.build_conditional_branch(condition.into_int_value(), then_block, else_block);
 
             generator.builder.position_at_end(then_block);
-            let then_option = generator.codegen_branch(&self.then, end_block, cache);
+            let then_option = generator.codegen_branch(self.then, end_block, cache);
 
             generator.builder.position_at_end(else_block);
             let else_option = generator.codegen_branch(otherwise, end_block, cache);
@@ -1202,7 +1220,7 @@ impl<'g, 'c> CodeGen<'g, 'c> for ast::If<'c> {
             generator.builder.build_conditional_branch(condition.into_int_value(), then_block, end_block);
 
             generator.builder.position_at_end(then_block);
-            generator.codegen_branch(&self.then, end_block, cache);
+            generator.codegen_branch(self.then, end_block, cache);
 
             generator.builder.position_at_end(end_block);
             generator.unit_value()
@@ -1275,7 +1293,8 @@ impl<'g, 'c> CodeGen<'g, 'c> for ast::Extern<'c> {
 impl<'g, 'c> CodeGen<'g, 'c> for ast::MemberAccess<'c> {
     fn codegen(&self, generator: &mut Generator<'g>, cache: &mut ModuleCache<'c>) -> BasicValueEnum<'g> {
         let lhs = self.lhs.codegen(generator, cache);
-        let index = generator.get_field_index(&self.field, self.lhs.get_type().unwrap(), cache);
+        let lhs_type = cache.get_node(self.lhs).get_type();
+        let index = generator.get_field_index(&self.field, lhs_type.unwrap(), cache);
 
         // If our lhs is a load from an alloca, create a GEP instead of extracting directly.
         // This will delay the load as long as possible which makes this easier to detect

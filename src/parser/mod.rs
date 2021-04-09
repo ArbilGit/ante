@@ -22,18 +22,19 @@ mod error;
 pub mod ast;
 pub mod pretty_printer;
 
-use crate::lexer::token::Token;
-use ast::{ Ast, Type, Trait, TypeDefinitionBody };
-use error::{ ParseError, ParseResult };
+use crate::cache::ModuleCache;
 use crate::error::location::Location;
-use combinators::*;
+use crate::lexer::token::Token;
+use crate::parser::ast::{ Ast, AstId, Type, Trait, TypeDefinitionBody };
+use crate::parser::combinators::*;
+use crate::parser::error::{ ParseError, ParseResult };
 
-type AstResult<'a, 'b> = ParseResult<'a, 'b, Ast<'b>>;
+type AstResult<'a, 'b> = ParseResult<'a, 'b, AstId>;
 
 /// The entry point to parsing. Parses an entire file, printing any
 /// error found, or returns the Ast if there was no error.
-pub fn parse<'a, 'b>(input: Input<'a, 'b>) -> Result<Ast<'b>, ParseError<'b>> {
-    let result = parse_file(input);
+pub fn parse<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> Result<AstId, ParseError<'b>> {
+    let result = parse_file(input, cache);
     if let Err(error) = &result {
         eprintln!("{}", error);
     }
@@ -41,19 +42,19 @@ pub fn parse<'a, 'b>(input: Input<'a, 'b>) -> Result<Ast<'b>, ParseError<'b>> {
 }
 
 /// A file is a sequence of statements, separated by newlines.
-pub fn parse_file<'a, 'b>(input: Input<'a, 'b>) -> Result<Ast<'b>, ParseError<'b>> {
-    let (input, _, _) = maybe_newline(input)?;
-    let (input, ast, _) = statement_list(input)?;
-    let (input, _, _) = maybe_newline(input)?;
-    let _ = expect(Token::EndOfInput)(input)?;
+pub fn parse_file<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> Result<AstId, ParseError<'b>> {
+    let (input, _, _) = maybe_newline(input, cache)?;
+    let (input, ast, _) = statement_list(input, cache)?;
+    let (input, _, _) = maybe_newline(input, cache)?;
+    let _ = expect(Token::EndOfInput)(input, cache)?;
     Ok(ast)
 }
 
-fn maybe_newline<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, Option<Token>> {
-    maybe(expect(Token::Newline))(input)
+fn maybe_newline<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Option<Token>> {
+    maybe(expect(Token::Newline))(input, cache)
 }
 
-parser!(statement_list loc =
+parser!(statement_list loc cache =
     first <- statement;
     rest <- many0(pair( expect(Token::Newline), statement ));
     if rest.is_empty() {
@@ -64,42 +65,42 @@ parser!(statement_list loc =
         for (_, b) in rest.into_iter() {
             statements.push(b);
         }
-        Ast::sequence(statements, loc)
+        Ast::sequence(cache, statements, loc)
     }
 );
 
-fn statement<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
+fn statement<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
     match input[0].0 {
         Token::ParenthesisLeft |
-        Token::Identifier(_) => or(&[definition, assignment, expression], &"statement")(input),
-        Token::Type => or(&[type_definition, type_alias], &"statement")(input),
-        Token::Import => import(input),
-        Token::Trait => trait_definition(input),
-        Token::Impl => trait_impl(input),
-        Token::Return => return_expr(input),
-        Token::Extern => parse_extern(input),
-        _ => expression(input),
+        Token::Identifier(_) => or(&[definition, assignment, expression], &"statement")(input, cache),
+        Token::Type => or(&[type_definition, type_alias], &"statement")(input, cache),
+        Token::Import => import(input, cache),
+        Token::Trait => trait_definition(input, cache),
+        Token::Impl => trait_impl(input, cache),
+        Token::Return => return_expr(input, cache),
+        Token::Extern => parse_extern(input, cache),
+        _ => expression(input, cache),
     }
 }
 
-fn definition<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
-    raw_definition(input).map(|(input, definition, location)|
-            (input, Ast::Definition(definition), location))
+fn definition<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
+    raw_definition(input, cache).map(|(input, definition, location)|
+            (input, cache.push_node(Ast::Definition(definition)), location))
 }
 
-fn raw_definition<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, ast::Definition<'b>> {
-    or(&[function_definition, variable_definition], &"definition")(input)
+fn raw_definition<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, ast::Definition<'b>> {
+    or(&[function_definition, variable_definition], &"definition")(input, cache)
 }
 
-parser!(function_definition location -> 'b ast::Definition<'b> =
+parser!(function_definition location cache -> 'b ast::Definition<'b> =
     name <- irrefutable_pattern_argument;
     args <- many1(irrefutable_pattern_argument);
     return_type <- maybe(function_return_type);
     _ <- expect(Token::Equal);
     body !<- block_or_statement;
     ast::Definition {
-        pattern: Box::new(name),
-        expr: Box::new(Ast::lambda(args, return_type, body, location)),
+        pattern: name,
+        expr: Ast::lambda(cache, args, return_type, body, location),
         mutable: false,
         location,
         level: None,
@@ -108,26 +109,26 @@ parser!(function_definition location -> 'b ast::Definition<'b> =
     }
 );
 
-parser!(varargs location -> 'b () =
+parser!(varargs location cache -> 'b () =
     _ <- expect(Token::Range);
     _ <- expect(Token::MemberAccess);
     ()
 );
 
-parser!(function_return_type location -> 'b ast::Type<'b> =
+parser!(function_return_type location cache -> 'b ast::Type<'b> =
     _ <- expect(Token::RightArrow);
     typ <- parse_type;
     typ
 );
 
-parser!(variable_definition location -> 'b ast::Definition<'b> =
+parser!(variable_definition location cache -> 'b ast::Definition<'b> =
     name <- irrefutable_pattern;
     _ <- expect(Token::Equal);
     mutable <- maybe(expect(Token::Mut));
     expr !<- block_or_statement;
     ast::Definition {
-        pattern: Box::new(name),
-        expr: Box::new(expr),
+        pattern: name,
+        expr: expr,
         mutable: mutable.is_some(),
         location,
         level: None,
@@ -136,223 +137,223 @@ parser!(variable_definition location -> 'b ast::Definition<'b> =
     }
 );
 
-parser!(assignment location =
+parser!(assignment location cache =
     lhs <- expression;
     _ <- expect(Token::Assignment);
     rhs !<- expression;
-    Ast::assignment(lhs, rhs, location)
+    Ast::assignment(cache, lhs, rhs, location)
 );
 
-parser!(type_annotation_pattern loc =
+parser!(type_annotation_pattern loc cache =
     lhs <- irrefutable_pattern_argument;
     _ <- expect(Token::Colon);
     rhs <- parse_type;
-    Ast::type_annotation(lhs, rhs, loc)
+    Ast::type_annotation(cache, lhs, rhs, loc)
 );
 
-fn irrefutable_pattern<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
+fn irrefutable_pattern<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
     or(&[
        type_annotation_pattern,
        irrefutable_pair_pattern,
        irrefutable_pattern_argument
-    ], &"irrefutable_pattern")(input)
+    ], &"irrefutable_pattern")(input, cache)
 }
 
-parser!(irrefutable_pair_pattern loc =
+parser!(irrefutable_pair_pattern loc cache =
     first <- irrefutable_pattern_argument;
     _ <- expect(Token::Comma);
     rest !<- irrefutable_pattern;
-    Ast::function_call(Ast::operator(Token::Comma, loc), vec![first, rest], loc)
+    Ast::operator_call(cache, Token::Comma, vec![first, rest], loc)
 );
 
-fn parenthesized_irrefutable_pattern<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
-    parenthesized(or(&[operator, irrefutable_pattern], "irrefutable pattern"))(input)
+fn parenthesized_irrefutable_pattern<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
+    parenthesized(or(&[operator, irrefutable_pattern], "irrefutable pattern"))(input, cache)
 }
 
-fn irrefutable_pattern_argument<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
+fn irrefutable_pattern_argument<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
     match input[0].0 {
-        Token::ParenthesisLeft => parenthesized_irrefutable_pattern(input),
-        Token::UnitLiteral => unit(input),
-        _ => variable(input),
+        Token::ParenthesisLeft => parenthesized_irrefutable_pattern(input, cache),
+        Token::UnitLiteral => unit(input, cache),
+        _ => variable(input, cache),
     }
 }
 
-parser!(type_definition loc =
+parser!(type_definition loc cache =
     _ <- expect(Token::Type);
     name <- typename;
     args <- many0(identifier);
     _ <- expect(Token::Equal);
     body !<- type_definition_body;
-    Ast::type_definition(name, args, body, loc)
+    Ast::type_definition(cache, name, args, body, loc)
 );
 
-parser!(type_alias loc =
+parser!(type_alias loc cache =
     _ <- expect(Token::Type);
     name <- typename;
     args <- many0(identifier);
     _ <- expect(Token::Is);
     body !<- parse_type;
-    Ast::type_definition(name, args, TypeDefinitionBody::AliasOf(body), loc)
+    Ast::type_definition(cache, name, args, TypeDefinitionBody::AliasOf(body), loc)
 );
 
-fn type_definition_body<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, ast::TypeDefinitionBody<'b>> {
+fn type_definition_body<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, ast::TypeDefinitionBody<'b>> {
     match input[0].0 {
-        Token::Indent => or(&[union_block_body, struct_block_body], &"type_definition_body")(input),
-        Token::Pipe => union_inline_body(input),
-        _ => struct_inline_body(input),
+        Token::Indent => or(&[union_block_body, struct_block_body], &"type_definition_body")(input, cache),
+        Token::Pipe => union_inline_body(input, cache),
+        _ => struct_inline_body(input, cache),
     }
 }
 
-parser!(union_variant loc -> 'b (String, Vec<Type<'b>>, Location<'b>) =
+parser!(union_variant loc cache -> 'b (String, Vec<Type<'b>>, Location<'b>) =
     _ <- expect(Token::Pipe);
     variant !<- typename;
     args !<- many0(basic_type);
     (variant, args, loc)
 );
 
-parser!(union_block_body _loc -> 'b ast::TypeDefinitionBody<'b> =
+parser!(union_block_body _loc cache -> 'b ast::TypeDefinitionBody<'b> =
     _ <- expect(Token::Indent);
     variants <- delimited_trailing(union_variant, expect(Token::Newline));
     _ !<- expect(Token::Unindent);
     TypeDefinitionBody::UnionOf(variants)
 );
 
-parser!(union_inline_body _loc -> 'b ast::TypeDefinitionBody<'b> =
+parser!(union_inline_body _loc cache -> 'b ast::TypeDefinitionBody<'b> =
     variants <- many1(union_variant);
     TypeDefinitionBody::UnionOf(variants)
 );
 
-parser!(struct_field loc -> 'b (String, Type<'b>, Location<'b>) =
+parser!(struct_field loc cache -> 'b (String, Type<'b>, Location<'b>) =
     field_name <- identifier;
     _ !<- expect(Token::Colon);
     field_type !<- parse_type_no_pair;
     (field_name, field_type, loc)
 );
 
-parser!(struct_block_body _loc -> 'b ast::TypeDefinitionBody<'b> =
+parser!(struct_block_body _loc cache -> 'b ast::TypeDefinitionBody<'b> =
     _ <- expect(Token::Indent);
     fields <- delimited_trailing(struct_field, expect(Token::Newline));
     _ !<- expect(Token::Unindent);
     TypeDefinitionBody::StructOf(fields)
 );
 
-parser!(struct_inline_body _loc -> 'b ast::TypeDefinitionBody<'b> =
+parser!(struct_inline_body _loc cache -> 'b ast::TypeDefinitionBody<'b> =
     fields <- delimited(struct_field, expect(Token::Comma));
     TypeDefinitionBody::StructOf(fields)
 );
 
-parser!(import loc =
+parser!(import loc cache =
     _ <- expect(Token::Import);
     path <- delimited(typename, expect(Token::MemberAccess));
-    Ast::import(path, loc)
+    Ast::import(cache, path, loc)
 );
 
-parser!(trait_definition loc =
+parser!(trait_definition loc cache =
     _ <- expect(Token::Trait);
     name !<- typename;
     args !<- many1(identifier);
     _ !<- maybe(expect(Token::RightArrow));
     fundeps !<- many0(identifier);
     body <- maybe(trait_body);
-    Ast::trait_definition(name, args, fundeps, body.unwrap_or(vec![]), loc)
+    Ast::trait_definition(cache, name, args, fundeps, body.unwrap_or(vec![]), loc)
 );
 
-parser!(trait_body loc -> 'b Vec<ast::TypeAnnotation<'b>> =
+parser!(trait_body loc cache -> 'b Vec<AstId> =
     _ <- expect(Token::With);
     body <- or(&[trait_body_block, trait_body_single], "trait body");
     body
 );
 
-parser!(trait_body_single loc -> 'b Vec<ast::TypeAnnotation<'b>> =
+parser!(trait_body_single loc cache -> 'b Vec<AstId> =
     body <- declaration;
     vec![body]
 );
 
-parser!(trait_body_block loc -> 'b Vec<ast::TypeAnnotation<'b>> =
+parser!(trait_body_block loc cache -> 'b Vec<AstId> =
     _ <- expect(Token::Indent);
     body !<- delimited_trailing(declaration, expect(Token::Newline));
     _ !<- expect(Token::Unindent);
     body
 );
 
-parser!(declaration loc -> 'b ast::TypeAnnotation<'b> =
+parser!(declaration loc cache =
     lhs <- irrefutable_pattern_argument;
     _ <- expect(Token::Colon);
     rhs !<- parse_type;
-    ast::TypeAnnotation { lhs: Box::new(lhs), rhs, location: loc, typ: None }
+    Ast::type_annotation(cache, lhs, rhs, loc)
 );
 
-parser!(trait_impl loc =
+parser!(trait_impl loc cache =
     _ <- expect(Token::Impl);
     name !<- typename;
     args !<- many1(basic_type);
     given !<- maybe(given);
     definitions !<- maybe(impl_body);
-    Ast::trait_impl(name, args, given.unwrap_or(vec![]), definitions.unwrap_or(vec![]), loc)
+    Ast::trait_impl(cache, name, args, given.unwrap_or(vec![]), definitions.unwrap_or(vec![]), loc)
 );
 
-parser!(impl_body loc -> 'b Vec<ast::Definition<'b>> =
+parser!(impl_body loc cache -> 'b Vec<AstId> =
     _ <- expect(Token::With);
     definitions <- or(&[impl_body_block, impl_body_single], "impl body");
     definitions
 );
 
-parser!(impl_body_single loc -> 'b Vec<ast::Definition<'b>> =
-    definition <- raw_definition;
+parser!(impl_body_single loc cache -> 'b Vec<AstId> =
+    definition <- definition;
     vec![definition]
 );
 
-parser!(impl_body_block loc -> 'b Vec<ast::Definition<'b>> =
+parser!(impl_body_block loc cache -> 'b Vec<AstId> =
     _ <- expect(Token::Indent);
-    definitions !<- delimited_trailing(raw_definition, expect(Token::Newline));
+    definitions !<- delimited_trailing(definition, expect(Token::Newline));
     _ !<- expect(Token::Unindent);
     definitions
 );
 
-parser!(given loc -> 'b Vec<Trait<'b>> =
+parser!(given loc cache -> 'b Vec<Trait<'b>> =
     _ <- expect(Token::Given);
     traits <- delimited(required_trait, expect(Token::Comma));
     traits
 );
 
-parser!(required_trait location -> 'b Trait<'b> =
+parser!(required_trait location cache -> 'b Trait<'b> =
     name <- typename;
     args <- many1(basic_type);
     Trait { name, args, location }
 );
 
-parser!(return_expr loc =
+parser!(return_expr loc cache =
     _ <- expect(Token::Return);
     expr !<- expression;
-    Ast::return_expr(expr, loc)
+    Ast::return_expr(cache, expr, loc)
 );
 
-parser!(parse_extern loc =
+parser!(parse_extern loc cache =
     _ <- expect(Token::Extern);
     declarations <- or(&[extern_block, extern_single], "extern");
-    Ast::extern_expr(declarations, loc)
+    Ast::extern_expr(cache, declarations, loc)
 );
 
-parser!(extern_block _loc -> 'b Vec<ast::TypeAnnotation<'b>>=
+parser!(extern_block _loc cache -> 'b Vec<AstId>=
     _ <- expect(Token::Indent);
     declarations !<- delimited_trailing(declaration, expect(Token::Newline));
     _ !<- expect(Token::Unindent);
     declarations
 );
 
-parser!(extern_single _loc -> 'b Vec<ast::TypeAnnotation<'b>> =
+parser!(extern_single _loc cache -> 'b Vec<AstId> =
     declaration <- declaration;
     vec![declaration]
 );
 
-fn block_or_statement<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
+fn block_or_statement<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
     match input[0].0 {
-        Token::Indent => block(input),
-        _ => statement(input),
+        Token::Indent => block(input, cache),
+        _ => statement(input, cache),
     }
 }
 
-parser!(block _loc =
+parser!(block _loc cache =
     _ <- expect(Token::Indent);
     expr !<- statement_list;
     _ !<- maybe_newline;
@@ -393,18 +394,18 @@ fn should_continue(operator_on_stack: &Token, r_prec: i8, r_is_right_assoc: bool
     || (l_prec == r_prec && !r_is_right_assoc)
 }
 
-fn pop_operator<'c>(operator_stack: &mut Vec<&Token>, results: &mut Vec<(Ast<'c>, Location<'c>)>) {
+fn pop_operator<'c>(operator_stack: &mut Vec<&Token>, results: &mut Vec<(AstId, Location<'c>)>, cache: &mut ModuleCache<'c>) {
     let (rhs, rhs_location) = results.pop().unwrap();
     let (lhs, lhs_location) = results.pop().unwrap();
     let location = lhs_location.union(rhs_location);
-    let operator = Ast::operator(operator_stack.pop().unwrap().clone(), location);
-    let call = Ast::function_call(operator, vec![lhs, rhs], location);
+    let operator = Ast::operator(cache, operator_stack.pop().unwrap().clone(), location);
+    let call = Ast::function_call(cache, operator, vec![lhs, rhs], location);
     results.push((call, location));
 }
 
 /// Parse an arbitrary expression using the shunting-yard algorithm
-fn expression<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
-    let (mut input, value, location) = term(input)?;
+fn expression<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
+    let (mut input, value, location) = term(input, cache)?;
 
     let mut operator_stack = vec![];
     let mut results = vec![(value, location)];
@@ -414,20 +415,20 @@ fn expression<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
         while !operator_stack.is_empty()
             && should_continue(operator_stack[operator_stack.len()- 1], prec, right_associative)
         {
-            pop_operator(&mut operator_stack, &mut results);
+            pop_operator(&mut operator_stack, &mut results, cache);
         }
 
         operator_stack.push(&input[0].0);
         input = &input[1..];
 
-        let (new_input, value, location) = no_backtracking(term)(input)?;
+        let (new_input, value, location) = no_backtracking(term)(input, cache)?;
         results.push((value, location));
         input = new_input;
     }
 
     while !operator_stack.is_empty() {
         assert!(results.len() >= 2);
-        pop_operator(&mut operator_stack, &mut results);
+        pop_operator(&mut operator_stack, &mut results, cache);
     }
 
     assert!(operator_stack.is_empty());
@@ -436,106 +437,106 @@ fn expression<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
     Ok((input, value, location))
 }
 
-fn term<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
+fn term<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
     match input[0].0 {
-        Token::If => if_expr(input),
-        Token::Match => match_expr(input),
+        Token::If => if_expr(input, cache),
+        Token::Match => match_expr(input, cache),
         _ => or(&[
             function_call,
             type_annotation,
             function_argument
-        ], &"term")(input),
+        ], &"term")(input, cache),
     }
 }
 
-parser!(function_call loc =
+parser!(function_call loc cache =
     function <- member_access;
     args <- many1(function_argument);
-    Ast::function_call(function, args, loc)
+    Ast::function_call(cache, function, args, loc)
 );
 
-parser!(if_expr loc =
+parser!(if_expr loc cache =
     _ <- expect(Token::If);
     condition !<- block_or_statement;
     _ !<- maybe_newline;
     _ !<- expect(Token::Then);
     then !<- block_or_statement;
     otherwise !<- maybe(else_expr);
-    Ast::if_expr(condition, then, otherwise, loc)
+    Ast::if_expr(cache, condition, then, otherwise, loc)
 );
 
-parser!(match_expr loc =
+parser!(match_expr loc cache =
     _ <- expect(Token::Match);
     expression !<- block_or_statement;
     _ !<- maybe_newline;
     _ !<- expect(Token::With);
     branches !<- many0(match_branch);
-    Ast::match_expr(expression, branches, loc)
+    Ast::match_expr(cache, expression, branches, loc)
 );
 
-parser!(not_expr loc =
+parser!(not_expr loc cache =
     not <- expect(Token::Not);
     expr !<- term;
-    Ast::function_call(Ast::operator(not, loc), vec![expr], loc)
+    Ast::operator_call(cache, not, vec![expr], loc)
 );
 
-parser!(ref_expr loc =
+parser!(ref_expr loc cache =
     token <- expect(Token::Ampersand);
     expr !<- term;
-    Ast::function_call(Ast::operator(token, loc), vec![expr], loc)
+    Ast::operator_call(cache, token, vec![expr], loc)
 );
 
-parser!(at_expr loc =
+parser!(at_expr loc cache =
     token <- expect(Token::At);
     expr !<- term;
-    Ast::function_call(Ast::operator(token, loc), vec![expr], loc)
+    Ast::operator_call(cache, token, vec![expr], loc)
 );
 
-parser!(type_annotation loc =
+parser!(type_annotation loc cache =
     lhs <- function_argument;
     _ <- expect(Token::Colon);
     rhs <- parse_type;
-    Ast::type_annotation(lhs, rhs, loc)
+    Ast::type_annotation(cache, lhs, rhs, loc)
 );
 
-fn parse_type<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, Type<'b>> {
+fn parse_type<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Type<'b>> {
     or(&[
         function_type,
         type_application,
         pair_type,
         basic_type
-    ], &"type")(input)
+    ], &"type")(input, cache)
 }
 
-fn parse_type_no_pair<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, Type<'b>> {
+fn parse_type_no_pair<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Type<'b>> {
     or(&[
         function_type,
         type_application,
         basic_type
-    ], &"type")(input)
+    ], &"type")(input, cache)
 }
 
-fn basic_type<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, Type<'b>> {
+fn basic_type<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Type<'b>> {
     match input[0].0 {
-        Token::IntegerType(_) => int_type(input),
-        Token::FloatType => float_type(input),
-        Token::CharType => char_type(input),
-        Token::StringType => string_type(input),
-        Token::BooleanType => boolean_type(input),
-        Token::UnitType => unit_type(input),
-        Token::Ref => reference_type(input),
-        Token::Identifier(_) => type_variable(input),
-        Token::TypeName(_) => user_defined_type(input),
-        Token::ParenthesisLeft => parenthesized_type(input),
+        Token::IntegerType(_) => int_type(input, cache),
+        Token::FloatType => float_type(input, cache),
+        Token::CharType => char_type(input, cache),
+        Token::StringType => string_type(input, cache),
+        Token::BooleanType => boolean_type(input, cache),
+        Token::UnitType => unit_type(input, cache),
+        Token::Ref => reference_type(input, cache),
+        Token::Identifier(_) => type_variable(input, cache),
+        Token::TypeName(_) => user_defined_type(input, cache),
+        Token::ParenthesisLeft => parenthesized_type(input, cache),
         _ => Err(ParseError::InRule(&"type", input[0].1)),
     }
 }
 
-fn parenthesized_type<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, Type<'b>> {
-    parenthesized(parse_type)(input)
+fn parenthesized_type<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Type<'b>> {
+    parenthesized(parse_type)(input, cache)
 }
 
-parser!(match_branch _loc -> 'b (Ast<'b>, Ast<'b>) =
+parser!(match_branch _loc cache -> 'b (AstId, AstId) =
     _ <- maybe_newline;
     _ <- expect(Token::Pipe);
     pattern !<- expression;
@@ -544,7 +545,7 @@ parser!(match_branch _loc -> 'b (Ast<'b>, Ast<'b>) =
     (pattern, branch)
 );
 
-parser!(else_expr _loc =
+parser!(else_expr _loc cache =
     _ <- maybe_newline;
     _ <- expect(Token::Else);
     otherwise !<- block_or_statement;
@@ -553,106 +554,106 @@ parser!(else_expr _loc =
 
 /// A function_argument is a unary expr or a member_access of
 /// 1-n arguments.
-fn function_argument<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
+fn function_argument<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
     match input[0].0 {
-        Token::Not => not_expr(input),
-        Token::Ampersand => ref_expr(input),
-        Token::At => at_expr(input),
-        _ => member_access(input),
+        Token::Not => not_expr(input, cache),
+        Token::Ampersand => ref_expr(input, cache),
+        Token::At => at_expr(input, cache),
+        _ => member_access(input, cache),
     }
 }
 
 /// member_access = argument ('.' identifier)*
-fn member_access<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
-    let (mut input, mut arg, mut location) = argument(input)?;
+fn member_access<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
+    let (mut input, mut arg, mut location) = argument(input, cache)?;
 
     while input[0].0 == Token::MemberAccess {
         input = &input[1..];
 
-        let (new_input, field, field_location) = no_backtracking(identifier)(input)?;
+        let (new_input, field, field_location) = no_backtracking(identifier)(input, cache)?;
         input = new_input;
         location = location.union(field_location);
-        arg = Ast::member_access(arg, field, location);
+        arg = Ast::member_access(cache, arg, field, location);
     }
 
     Ok((input, arg, location))
 }
 
-fn argument<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
+fn argument<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
     match input[0].0 {
-        Token::Identifier(_) => variable(input),
-        Token::StringLiteral(_) => string(input),
-        Token::IntegerLiteral(_, _) => integer(input),
-        Token::FloatLiteral(_) => float(input),
-        Token::CharLiteral(_) => parse_char(input),
-        Token::BooleanLiteral(_) => parse_bool(input),
-        Token::UnitLiteral => unit(input),
-        Token::Backslash => lambda(input),
-        Token::ParenthesisLeft => parenthesized_expression(input),
-        Token::TypeName(_) => variant(input),
+        Token::Identifier(_) => variable(input, cache),
+        Token::StringLiteral(_) => string(input, cache),
+        Token::IntegerLiteral(_, _) => integer(input, cache),
+        Token::FloatLiteral(_) => float(input, cache),
+        Token::CharLiteral(_) => parse_char(input, cache),
+        Token::BooleanLiteral(_) => parse_bool(input, cache),
+        Token::UnitLiteral => unit(input, cache),
+        Token::Backslash => lambda(input, cache),
+        Token::ParenthesisLeft => parenthesized_expression(input, cache),
+        Token::TypeName(_) => variant(input, cache),
         _ => Err(ParseError::InRule(&"argument", input[0].1)),
     }
 }
 
-parser!(lambda loc =
+parser!(lambda loc cache =
     _ <- expect(Token::Backslash);
     args !<- many1(irrefutable_pattern_argument);
     return_type <- maybe(function_return_type);
     _ !<- expect(Token::MemberAccess);
     body !<- block_or_statement;
-    Ast::lambda(args, return_type, body, loc)
+    Ast::lambda(cache, args, return_type, body, loc)
 );
 
-parser!(operator loc =
+parser!(operator loc cache =
     op <- expect_if("operator", |op| op.is_overloadable_operator());
-    Ast::operator(op, loc)
+    Ast::operator(cache, op, loc)
 );
 
-fn parenthesized_expression<'a, 'b>(input: Input<'a, 'b>) -> AstResult<'a, 'b> {
-    parenthesized(or(&[expression, operator], &"argument"))(input)
+fn parenthesized_expression<'a, 'b>(input: Input<'a, 'b>, cache: &mut ModuleCache<'b>) -> AstResult<'a, 'b> {
+    parenthesized(or(&[expression, operator], &"argument"))(input, cache)
 }
 
-parser!(variant loc =
+parser!(variant loc cache =
     name <- typename;
-    Ast::type_constructor(name, loc)
+    Ast::type_constructor(cache, name, loc)
 );
 
-parser!(variable loc =
+parser!(variable loc cache =
     name <- identifier;
-    Ast::variable(name, loc)
+    Ast::variable(cache, name, loc)
 );
 
-parser!(string loc =
+parser!(string loc cache =
     contents <- string_literal_token;
-    Ast::string(contents, loc)
+    Ast::string(cache, contents, loc)
 );
 
-parser!(integer loc =
+parser!(integer loc cache =
     value <- integer_literal_token;
-    Ast::integer(value.0, value.1, loc)
+    Ast::integer(cache, value.0, value.1, loc)
 );
 
-parser!(float loc =
+parser!(float loc cache =
     value <- float_literal_token;
-    Ast::float(value, loc)
+    Ast::float(cache, value, loc)
 );
 
-parser!(parse_char loc =
+parser!(parse_char loc cache =
     contents <- char_literal_token;
-    Ast::char_literal(contents, loc)
+    Ast::char_literal(cache, contents, loc)
 );
 
-parser!(parse_bool loc =
+parser!(parse_bool loc cache =
     value <- bool_literal_token;
-    Ast::bool_literal(value, loc)
+    Ast::bool_literal(cache, value, loc)
 );
 
-parser!(unit loc =
+parser!(unit loc cache =
     _ <- expect(Token::UnitLiteral);
-    Ast::unit_literal(loc)
+    Ast::unit_literal(cache, loc)
 );
 
-parser!(function_type loc -> 'b Type<'b> =
+parser!(function_type loc cache -> 'b Type<'b> =
     args <- many1(basic_type);
     varargs <- maybe(varargs);
     _ <- expect(Token::RightArrow);
@@ -660,60 +661,60 @@ parser!(function_type loc -> 'b Type<'b> =
     Type::FunctionType(args, Box::new(return_type), varargs.is_some(), loc)
 );
 
-parser!(type_application loc -> 'b Type<'b> =
+parser!(type_application loc cache -> 'b Type<'b> =
     type_constructor <- basic_type;
     args <- many1(basic_type);
     Type::TypeApplication(Box::new(type_constructor), args, loc)
 );
 
-parser!(pair_type loc -> 'b Type<'b> =
+parser!(pair_type loc cache -> 'b Type<'b> =
     first <- basic_type;
     _ <- expect(Token::Comma);
     rest !<- parse_type;
     Type::PairType(Box::new(first), Box::new(rest), loc)
 );
 
-parser!(int_type loc -> 'b Type<'b> =
+parser!(int_type loc cache -> 'b Type<'b> =
     kind <- int_type_token;
     Type::IntegerType(kind, loc)
 );
 
-parser!(float_type loc -> 'b Type<'b> =
+parser!(float_type loc cache -> 'b Type<'b> =
     _ <- expect(Token::FloatType);
     Type::FloatType(loc)
 );
 
-parser!(char_type loc -> 'b Type<'b> =
+parser!(char_type loc cache -> 'b Type<'b> =
     _ <- expect(Token::CharType);
     Type::CharType(loc)
 );
 
-parser!(string_type loc -> 'b Type<'b> =
+parser!(string_type loc cache -> 'b Type<'b> =
     _ <- expect(Token::StringType);
     Type::StringType(loc)
 );
 
-parser!(boolean_type loc -> 'b Type<'b> =
+parser!(boolean_type loc cache -> 'b Type<'b> =
     _ <- expect(Token::BooleanType);
     Type::BooleanType(loc)
 );
 
-parser!(unit_type loc -> 'b Type<'b> =
+parser!(unit_type loc cache -> 'b Type<'b> =
     _ <- expect(Token::UnitType);
     Type::UnitType(loc)
 );
 
-parser!(reference_type loc -> 'b Type<'b> =
+parser!(reference_type loc cache -> 'b Type<'b> =
     _ <- expect(Token::Ref);
     Type::ReferenceType(loc)
 );
 
-parser!(type_variable loc -> 'b Type<'b> =
+parser!(type_variable loc cache -> 'b Type<'b> =
     name <- identifier;
     Type::TypeVariable(name, loc)
 );
 
-parser!(user_defined_type loc -> 'b Type<'b> =
+parser!(user_defined_type loc cache -> 'b Type<'b> =
     name <- typename;
     Type::UserDefinedType(name, loc)
 );

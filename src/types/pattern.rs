@@ -29,6 +29,7 @@ pub fn compile<'c>(match_expr: &ast::Match<'c>, cache: &mut ModuleCache<'c>) -> 
     if result.context.reachable_branches.len() != match_expr.branches.len() {
         for (i, (pattern, _branch)) in match_expr.branches.iter().enumerate() {
             if !result.context.reachable_branches.contains(&i) {
+                let pattern = cache.get_node(*pattern);
                 warning!(pattern.locate(), "Unreachable pattern");
             }
         }
@@ -199,11 +200,12 @@ impl PatternStack {
                 PatternStack(vec![(Variant(tag, fields), variable)])
             },
             Ast::FunctionCall(call) => {
-                match call.function.as_ref() {
+                let function = cache.get_node(call.function);
+                match function {
                     Ast::Variable(variable) => {
                         let tag = VariantTag::UserDefined(variable.definition.unwrap());
                         let fields = call.args.iter().rev()
-                            .flat_map(|arg| PatternStack::from_ast(arg, cache, location))
+                            .flat_map(|arg| PatternStack::from_ast(cache.get_node(*arg), cache, location))
                             .collect();
 
                         let fields = PatternStack(fields);
@@ -382,9 +384,10 @@ struct PatternMatrix {
 impl PatternMatrix {
     fn from_ast<'c>(match_expr: &ast::Match<'c>, cache: &mut ModuleCache<'c>, location: Location<'c>) -> PatternMatrix {
         let rows = match_expr.branches.iter().enumerate()
-            .map(|(branch_index, (pattern, _))|
-                 (PatternStack::from_ast(pattern, cache, location), branch_index))
-            .collect();
+            .map(|(branch_index, (pattern, _))| {
+                let pattern = cache.get_node(*pattern);
+                (PatternStack::from_ast(pattern, cache, location), branch_index)
+            }).collect();
 
         PatternMatrix { rows }
     }

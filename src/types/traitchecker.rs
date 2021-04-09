@@ -23,7 +23,7 @@ use crate::types::{ TypeInfoId, DEFAULT_INTEGER_TYPE, Type, PrimitiveType, TypeV
 use crate::types::traits::{ RequiredTrait, TraitConstraint, TraitConstraints };
 use crate::types::typechecker::{ self, TypeBindings, UnificationResult };
 use crate::lexer::token::IntegerKind;
-use crate::util::{ trustme, fmap };
+use crate::util::fmap;
 
 use colored::Colorize;
 use std::collections::HashMap;
@@ -366,6 +366,5 @@ fn find_definition_in_impl<'c>(origin: VariableId, impl_id: ImplInfoId, cache: &
 /// is found in the program.
 fn infer_trait_impl<'a>(id: ImplInfoId, cache: &mut ModuleCache<'a>) {
     let info = &mut cache.impl_infos[id.0];
-    let trait_impl = trustme::extend_lifetime(info.trait_impl);
-    typechecker::infer(trait_impl, cache);
+    typechecker::infer(info.trait_impl, cache);
 }

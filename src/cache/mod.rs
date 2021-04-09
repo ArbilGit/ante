@@ -19,7 +19,7 @@ use crate::types::{ TypeVariableId, TypeInfoId, TypeInfo, Type, TypeInfoBody };
 use crate::types::{ TypeBinding, LetBindingLevel, Kind };
 use crate::types::traits::{ RequiredImpl, RequiredTrait };
 use crate::error::location::{ Location, Locatable };
-use crate::parser::ast::{ Ast, Definition, TraitDefinition, TraitImpl, TypeAnnotation };
+use crate::parser::ast::{ Ast, AstId };
 use crate::cache::unsafecache::UnsafeCache;
 
 use std::path::{ Path, PathBuf };
@@ -40,9 +40,9 @@ pub struct ModuleCache<'a> {
     /// any libraries used by the program, including the standard library.
     pub relative_roots: Vec<PathBuf>,
 
-    /// Maps ModuleId -> Ast
-    /// Contains all the parse trees parsed by the program.
-    pub parse_trees: UnsafeCache<'a, Ast<'a>>,
+    /// Maps AstId -> Ast
+    /// Contains all the Asts allocated by the program.
+    pub nodes: Vec<Ast<'a>>,
 
     /// Used to map paths to parse trees or name resolvers
     pub modules: HashMap<PathBuf, ModuleId>,
@@ -121,16 +121,16 @@ impl std::fmt::Debug for DefinitionInfoId {
     }
 }
 
-#[derive(Debug)]
-pub enum DefinitionKind<'a> {
+#[derive(Debug, Clone)]
+pub enum DefinitionKind {
     /// A variable/function definition in the form `a = b`
-    Definition(&'a mut Definition<'a>),
+    Definition(AstId),
 
     /// A trait definition in the form `trait A a with ...`
-    TraitDefinition(&'a mut TraitDefinition<'a>),
+    TraitDefinition(AstId),
 
     /// An extern FFI definition with no body
-    Extern(&'a mut TypeAnnotation<'a>),
+    Extern(AstId),
 
     /// A TypeConstructor function to construct a type.
     /// If the constructed type is a tagged union, tag will
@@ -159,7 +159,7 @@ pub struct DefinitionInfo<'a> {
 
     /// Where this name was defined. It is expected that type checking
     /// this Definition kind should result in self.typ being filled out.
-    pub definition: Option<DefinitionKind<'a>>,
+    pub definition: Option<DefinitionKind>,
 
     /// True if this definition can be reassigned to.
     pub mutable: bool,
@@ -235,7 +235,7 @@ pub struct TraitInfo<'a> {
 
     /// The Ast node that defines this trait.
     /// A value of None means this trait was builtin to the compiler
-    pub trait_node: Option<&'a mut TraitDefinition<'a>>,
+    pub trait_node: Option<AstId>,
 
     pub uses: u32,
 }
@@ -284,7 +284,7 @@ pub struct ImplInfo<'a> {
     pub location: Location<'a>,
     pub definitions: Vec<DefinitionInfoId>,
     pub given: Vec<RequiredTrait>,
-    pub trait_impl: &'a mut TraitImpl<'a>,
+    pub trait_impl: AstId,
 }
 
 /// Each `ast::Variable` node corresponds to a VariableId that identifies it,
@@ -304,7 +304,7 @@ impl<'a> ModuleCache<'a> {
             prelude_path: dirs::config_dir().unwrap().join("stdlib/prelude"),
             // Really wish you could do ..Default::default() for the remaining fields
             modules: HashMap::default(),
-            parse_trees: UnsafeCache::default(),
+            nodes: Vec::default(),
             name_resolvers: UnsafeCache::default(),
             filepaths: Vec::default(),
             definition_infos: Vec::default(),
@@ -345,8 +345,15 @@ impl<'a> ModuleCache<'a> {
         DefinitionInfoId(id)
     }
 
-    pub fn push_ast(&mut self, ast: Ast<'a>) -> ModuleId {
-        ModuleId(self.parse_trees.push(ast))
+    pub fn push_node(&mut self, ast: Ast<'a>) -> AstId {
+        let len = self.nodes.len();
+        self.nodes.push(ast);
+        AstId(len)
+    }
+
+    pub fn get_node<'b, 'c>(&'b self, id: AstId) -> &'c mut Ast<'a> {
+        let nodes: &mut Vec<Ast<'a>> = crate::util::trustme::make_mut(&self.nodes);
+        nodes.get_mut(id.0).unwrap()
     }
 
     pub fn push_type_info(&mut self, name: String, args: Vec<TypeVariableId>, location: Location<'a>) -> TypeInfoId {
@@ -373,10 +380,8 @@ impl<'a> ModuleCache<'a> {
     }
 
     pub fn push_trait_definition(&mut self, name: String, typeargs: Vec<TypeVariableId>,
-                fundeps: Vec<TypeVariableId>, trait_node: Option<&'a mut TraitDefinition<'a>>,
-                location: Location<'a>) -> TraitInfoId
+        fundeps: Vec<TypeVariableId>, trait_node: Option<AstId>, location: Location<'a>) -> TraitInfoId
     {
-
         let id = self.trait_infos.len();
         self.trait_infos.push(TraitInfo {
             name,
@@ -391,9 +396,9 @@ impl<'a> ModuleCache<'a> {
     }
 
     pub fn push_trait_impl(&mut self, trait_id: TraitInfoId, typeargs: Vec<Type>,
-            definitions: Vec<DefinitionInfoId>, trait_impl: &'a mut TraitImpl<'a>,
-            given: Vec<RequiredTrait>, location: Location<'a>) -> ImplInfoId {
-
+        definitions: Vec<DefinitionInfoId>, trait_impl: AstId,
+        given: Vec<RequiredTrait>, location: Location<'a>) -> ImplInfoId
+    {
         let id = self.impl_infos.len();
         self.impl_infos.push(ImplInfo {
             trait_id,

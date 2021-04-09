@@ -1,0 +1,14 @@
+extern
+    new : a -> ref a
+    deref : (ref a) -> a
+
+nextgen (previous: ref bool) -> ref bool =
+    new (not (deref previous))
+
+life (n: usz) (current: ref bool) =
+    if n == 0 then current
+    else life (n - 1) (nextgen current)
+
+foo = life 2 (new true)
+
+// args: --check --show-lifetimes

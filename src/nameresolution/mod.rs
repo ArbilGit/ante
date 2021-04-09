@@ -36,7 +36,7 @@
 //!   - `type_info: Option<TypeInfoId>` for `ast::TypeDefinition`s,
 //!   - `trait_info: Option<TraitInfoId>` for `ast::TraitDefinition`s and `ast::TraitImpl`s
 //!   - `module_id: Option<ModuleId>` for `ast::Import`s,
-use crate::parser::{ self, ast, ast::Ast };
+use crate::parser::{ self, ast, ast::Ast, ast::AstId };
 use crate::types::{ TypeInfoId, TypeVariableId, Type, PrimitiveType,
                     TypeInfoBody, TypeConstructor, Field, LetBindingLevel,
                     INITIAL_LEVEL, STRING_TYPE };
@@ -46,7 +46,7 @@ use crate::cache::{ ModuleCache, DefinitionInfoId, ModuleId };
 use crate::cache::{ TraitInfoId, ImplInfoId, DefinitionKind };
 use crate::nameresolution::scope::Scope;
 use crate::lexer::{ Lexer, token::Token };
-use crate::util::{ fmap, trustme, timing };
+use crate::util::{ fmap, timing };
 
 use colored::Colorize;
 
@@ -116,6 +116,8 @@ pub struct NameResolver {
     state: NameResolutionState,
 
     module_id: ModuleId,
+
+    root_node: AstId,
 
     let_binding_level: LetBindingLevel,
 
@@ -331,7 +333,7 @@ impl NameResolver {
     }
 
     fn push_trait<'c>(&mut self, name: String, args: Vec<TypeVariableId>,
-                fundeps: Vec<TypeVariableId>, node: &'c mut ast::TraitDefinition<'c>,
+                fundeps: Vec<TypeVariableId>, node_id: AstId,
                 cache: &mut ModuleCache<'c>, location: Location<'c>) -> TraitInfoId
     {
         if let Some(existing_definition) = self.current_scope().traits.get(&name) {
@@ -340,7 +342,7 @@ impl NameResolver {
             note!(previous_location, "{} previously defined here", name);
         }
 
-        let id = cache.push_trait_definition(name.clone(), args, fundeps, Some(node), location);
+        let id = cache.push_trait_definition(name.clone(), args, fundeps, Some(node_id), location);
         if self.in_global_scope() {
             self.exports.traits.insert(name.clone(), id);
         }
@@ -349,7 +351,7 @@ impl NameResolver {
     }
 
     fn push_trait_impl<'c>(&mut self, trait_id: TraitInfoId, args: Vec<Type>,
-                definitions: Vec<DefinitionInfoId>, trait_impl: &'c mut ast::TraitImpl<'c>,
+                definitions: Vec<DefinitionInfoId>, trait_impl: AstId,
                 given: Vec<RequiredTrait>, cache: &mut ModuleCache<'c>,
                 location: Location<'c>) -> ImplInfoId {
 
@@ -369,7 +371,7 @@ impl NameResolver {
 impl<'c> NameResolver {
     /// Performs name resolution on an entire program, starting from the
     /// given Ast and all imports reachable from it.
-    pub fn start(ast: Ast<'c>, cache: &mut ModuleCache<'c>) -> Result<(), ()> {
+    pub fn start(ast: &mut Ast<'c>, cache: &mut ModuleCache<'c>) -> Result<(), ()> {
         timing::start_time("Name Resolution (Declare)");
 
         builtin::define_builtins(cache);
@@ -388,13 +390,13 @@ impl<'c> NameResolver {
     /// Creates a NameResolver and performs the declare pass on
     /// the given ast, collecting all of its publically exported symbols
     /// into the `exports` field.
-    pub fn declare(ast: Ast<'c>, cache: &mut ModuleCache<'c>) -> &'c mut NameResolver {
+    pub fn declare(ast: &mut Ast<'c>, cache: &mut ModuleCache<'c>) -> &'c mut NameResolver {
         let filepath = ast.locate().filename;
 
         let existing = cache.get_name_resolver_by_path(&filepath);
         assert!(existing.is_none());
 
-        let module_id = cache.push_ast(ast);
+        let module_id = ModuleId(cache.name_resolvers.len());
         cache.modules.insert(filepath.to_owned(), module_id);
 
         let mut resolver = NameResolver {
@@ -410,6 +412,7 @@ impl<'c> NameResolver {
             required_definitions: None,
             definitions_collected: vec![],
             let_binding_level: LetBindingLevel(INITIAL_LEVEL),
+            root_node: ast.id(cache),
             module_id,
         };
 
@@ -423,7 +426,6 @@ impl<'c> NameResolver {
         let resolver = cache.name_resolvers.get_mut(module_id.0).unwrap();
         builtin::import_prelude(resolver, cache);
 
-        let ast = cache.parse_trees.get_mut(module_id.0).unwrap();
         ast.declare(resolver, cache);
         resolver.state = NameResolutionState::Declared;
 
@@ -434,7 +436,7 @@ impl<'c> NameResolver {
     /// variables to their definition, filling in each XXXInfoId field, etc.
     /// See the module-level comment for more details on the define pass.
     pub fn define(&mut self, cache: &mut ModuleCache<'c>) {
-        let ast = cache.parse_trees.get_mut(self.module_id.0).unwrap();
+        let ast = cache.get_node(self.root_node);
 
         assert!(self.state == NameResolutionState::Declared);
 
@@ -512,34 +514,32 @@ impl<'c> NameResolver {
 
     /// The collect* family of functions recurses over an irrefutable pattern, either declaring or
     /// defining each node and tagging the declaration with the given DefinitionNode.
-    fn resolve_declarations<F>(&mut self, ast: &mut Ast<'c>, cache: &mut ModuleCache<'c>, mut definition: F)
-        where F: FnMut() -> DefinitionKind<'c>
-    {
+    fn resolve_declarations(&mut self, ast: AstId, cache: &mut ModuleCache<'c>, definition_kind: DefinitionKind) {
+        let ast = cache.get_node(ast);
+
         self.definitions_collected.clear();
         self.auto_declare = true;
         ast.declare(self, cache);
         self.auto_declare = false;
         for id in self.definitions_collected.iter() {
-            cache.definition_infos[id.0].definition = Some(definition());
+            cache.definition_infos[id.0].definition = Some(definition_kind.clone());
         }
     }
 
-    fn resolve_definitions<T, F>(&mut self, ast: &mut T, cache: &mut ModuleCache<'c>, definition: F)
-        where T: Resolvable<'c>,
-              T: std::fmt::Display,
-              F: FnMut() -> DefinitionKind<'c>
+    fn resolve_definitions<T>(&mut self, ast: &mut T, cache: &mut ModuleCache<'c>, definition_kind: DefinitionKind)
+        where T: Resolvable<'c>
     {
-        self.resolve_all_definitions(vec![ast].into_iter(), cache, definition);
+        self.resolve_all_definitions(vec![ast].into_iter(), cache, definition_kind);
     }
 
-    fn resolve_extern_definitions(&mut self, declaration: &mut ast::TypeAnnotation<'c>, cache: &mut ModuleCache<'c>) {
+    fn resolve_extern_definitions(&mut self, declaration: &mut ast::TypeAnnotation<'c>, node_id: AstId, cache: &mut ModuleCache<'c>) {
         self.definitions_collected.clear();
         self.auto_declare = true;
         declaration.define(self, cache);
         self.auto_declare = false;
         for id in self.definitions_collected.iter() {
-            let declaration = trustme::extend_lifetime(declaration);
-            cache.definition_infos[id.0].definition = Some(DefinitionKind::Extern(declaration));
+            let definition = DefinitionKind::Extern(node_id);
+            cache.definition_infos[id.0].definition = Some(definition);
         }
     }
 
@@ -556,10 +556,9 @@ impl<'c> NameResolver {
         self.definitions_collected.clone()
     }
 
-    fn resolve_all_definitions<'a, T: 'a, It, F>(&mut self, patterns: It, cache: &mut ModuleCache<'c>, mut definition: F)
+    fn resolve_all_definitions<'a, T: 'a, It>(&mut self, patterns: It, cache: &mut ModuleCache<'c>, definition_kind: DefinitionKind)
         where It: Iterator<Item = &'a mut T>,
-              T: Resolvable<'c>,
-              F: FnMut() -> DefinitionKind<'c>
+              T: Resolvable<'c>
     {
         self.definitions_collected.clear();
         self.auto_declare = true;
@@ -568,7 +567,7 @@ impl<'c> NameResolver {
         }
         self.auto_declare = false;
         for id in self.definitions_collected.iter() {
-            cache.definition_infos[id.0].definition = Some(definition());
+            cache.definition_infos[id.0].definition = Some(definition_kind.clone());
         }
     }
 
@@ -598,6 +597,16 @@ impl<'c> Resolvable<'c> for Ast<'c> {
 
     fn define(&mut self, resolver: &mut NameResolver, cache: &mut ModuleCache<'c>) {
         dispatch_on_expr!(self, Resolvable::define, resolver, cache);
+    }
+}
+
+impl<'c> Resolvable<'c> for AstId {
+    fn declare(&mut self, resolver: &mut NameResolver, cache: &mut ModuleCache<'c>) {
+        cache.get_node(*self).declare(resolver, cache)
+    }
+
+    fn define(&mut self, resolver: &mut NameResolver, cache: &mut ModuleCache<'c>) {
+        cache.get_node(*self).define(resolver, cache)
     }
 }
 
@@ -664,9 +673,9 @@ impl<'c> Resolvable<'c> for ast::Variable<'c> {
 
             // If it is still not declared, print an error
             if self.definition.is_none() {
-                error!(self.location, "No declaration for {} was found in scope", self);
+                error!(self.location, "No declaration for {} was found in scope", self.name());
             } else if resolver.in_assignment_context && !cache.definition_infos[self.definition.unwrap().0].mutable {
-                error!(self.location, "Variable {} must be mutable to be assigned to", self);
+                error!(self.location, "Variable {} must be mutable to be assigned to", self.name());
             }
         }
     }
@@ -677,7 +686,7 @@ impl<'c> Resolvable<'c> for ast::Lambda<'c> {
 
     fn define(&mut self, resolver: &mut NameResolver, cache: &mut ModuleCache<'c>) {
         resolver.push_scope(cache);
-        resolver.resolve_all_definitions(self.args.iter_mut(), cache, || DefinitionKind::Parameter);
+        resolver.resolve_all_definitions(self.args.iter_mut(), cache, DefinitionKind::Parameter);
         self.body.define(resolver, cache);
         resolver.pop_scope(cache, true);
     }
@@ -696,13 +705,12 @@ impl<'c> Resolvable<'c> for ast::FunctionCall<'c> {
 
 impl<'c> Resolvable<'c> for ast::Definition<'c> {
     fn declare(&mut self, resolver: &mut NameResolver, cache: &mut ModuleCache<'c>) {
-        let definition = self as *const Self;
-        let definition = || DefinitionKind::Definition(trustme::make_mut(definition));
+        let definition_kind = DefinitionKind::Definition(ast::id(self, cache));
 
         resolver.push_let_binding_level();
         resolver.in_mutable_context = self.mutable;
 
-        resolver.resolve_declarations(self.pattern.as_mut(), cache, definition);
+        resolver.resolve_declarations(self.pattern, cache, definition_kind);
 
         resolver.in_mutable_context = false;
         self.level = Some(resolver.let_binding_level);
@@ -712,13 +720,13 @@ impl<'c> Resolvable<'c> for ast::Definition<'c> {
     fn define(&mut self, resolver: &mut NameResolver, cache: &mut ModuleCache<'c>) {
         // Tag the symbol with its definition so while type checking we can follow
         // the symbol to its definition if it is undefined.
-        let definition = self as *const Self;
-        let definition = || DefinitionKind::Definition(trustme::make_mut(definition));
+        let definition_kind = DefinitionKind::Definition(ast::id(self, cache));
 
         resolver.push_let_binding_level();
         resolver.in_mutable_context = self.mutable;
 
-        resolver.resolve_definitions(self.pattern.as_mut(), cache, definition);
+        let pattern = cache.get_node(self.pattern);
+        resolver.resolve_definitions(pattern, cache, definition_kind);
 
         resolver.in_mutable_context = false;
         self.level = Some(resolver.let_binding_level);
@@ -755,7 +763,7 @@ impl<'c> Resolvable<'c> for ast::Match<'c> {
         for (pattern, rhs) in self.branches.iter_mut() {
             resolver.push_scope(cache);
 
-            resolver.resolve_definitions(pattern, cache, || DefinitionKind::MatchPattern);
+            resolver.resolve_definitions(pattern, cache, DefinitionKind::MatchPattern);
 
             rhs.define(resolver, cache);
             resolver.pop_scope(cache, true);
@@ -930,7 +938,7 @@ pub fn declare_module<'a>(path: &Path, cache: &mut ModuleCache<'a>, error_locati
     let tokens = Lexer::new(&path, &contents).collect::<Vec<_>>();
 
     timing::start_time("Parsing");
-    let result = parser::parse(&tokens);
+    let result = parser::parse(&tokens, cache);
 
     timing::start_time("Name Resolution (Declare)");
     if result.is_err() {
@@ -938,7 +946,8 @@ pub fn declare_module<'a>(path: &Path, cache: &mut ModuleCache<'a>, error_locati
     }
 
     let ast = result.unwrap();
-    let import_resolver = NameResolver::declare(ast, cache);
+    let root = cache.get_node(ast);
+    let import_resolver = NameResolver::declare(root, cache);
     Some(import_resolver.module_id)
 }
 
@@ -995,15 +1004,16 @@ impl<'c> Resolvable<'c> for ast::TraitDefinition<'c> {
 
         assert!(resolver.current_trait.is_none());
 
+        let self_id = ast::id(self, cache);
         let trait_id = resolver.push_trait(self.name.clone(), args, fundeps,
-            trustme::extend_lifetime(self), cache, self.location);
+            self_id, cache, self.location);
 
         resolver.current_trait = Some(trait_id);
+        let definition_kind = DefinitionKind::TraitDefinition(self_id);
 
-        let self_pointer = self as *const _;
-        for declaration in self.declarations.iter_mut() {
-            let definition = || DefinitionKind::TraitDefinition(trustme::make_mut(self_pointer));
-            resolver.resolve_declarations(declaration.lhs.as_mut(), cache, definition);
+        for declaration in self.declarations.iter().copied() {
+            let declaration = unwrap_node_id!(declaration, TypeAnnotation, cache);
+            resolver.resolve_declarations(declaration.lhs, cache, definition_kind.clone());
 
             resolver.auto_declare = true;
             let rhs = resolver.convert_type(cache, &declaration.rhs);
@@ -1072,7 +1082,8 @@ impl<'c> Resolvable<'c> for ast::TraitImpl<'c> {
         resolver.current_trait = None;
 
         // All the names are present, now define them.
-        for definition in self.definitions.iter_mut() {
+        for definition in self.definitions.iter().copied() {
+            let definition = unwrap_node_id!(definition, Definition, cache);
             definition.expr.define(resolver, cache);
             definition.level = Some(resolver.let_binding_level);
         }
@@ -1083,8 +1094,8 @@ impl<'c> Resolvable<'c> for ast::TraitImpl<'c> {
         resolver.pop_scope(cache, false);
         resolver.pop_type_variable_scope();
 
-        let trait_impl = trustme::extend_lifetime(self);
-        resolver.push_trait_impl(trait_id, self.trait_arg_types.clone(), definitions, trait_impl, given, cache, self.locate());
+        let ast_id = ast::id(self, cache);
+        resolver.push_trait_impl(trait_id, self.trait_arg_types.clone(), definitions, ast_id, given, cache, self.locate());
     }
 }
 
@@ -1119,8 +1130,10 @@ impl<'c> Resolvable<'c> for ast::Extern<'c> {
         self.level = Some(resolver.let_binding_level);
         resolver.push_let_binding_level();
 
-        for declaration in self.declarations.iter_mut() {
-            resolver.resolve_extern_definitions(declaration, cache);
+        let ast_id = ast::id(self, cache);
+        for declaration in self.declarations.iter().copied() {
+            let declaration = unwrap_node_id!(declaration, TypeAnnotation, cache);
+            resolver.resolve_extern_definitions(declaration, ast_id, cache);
         }
 
         resolver.pop_let_binding_level();

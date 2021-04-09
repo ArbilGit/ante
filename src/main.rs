@@ -119,10 +119,13 @@ pub fn main() {
 
     // Phase 2: Parsing
     util::timing::start_time("Parsing");
-    let root = expect!(parser::parse(&tokens), "");
+    let root_id = expect!(parser::parse(&tokens, &mut cache), "");
+    let root = cache.get_node(root_id);
+
+    assert_eq!(root_id, root.id(&cache));
 
     if args.is_present("parse") {
-        println!("{}", root);
+        // println!("{}", root);
         return;
     }
 
@@ -131,10 +134,11 @@ pub fn main() {
     // break up the declare and define passes
     expect!(NameResolver::start(root, &mut cache), "");
 
+    let root = cache.get_node(root_id);
+
     // Phase 4: Type inference
     util::timing::start_time("Type Inference");
-    let ast = cache.parse_trees.get_mut(0).unwrap();
-    types::typechecker::infer_ast(ast, &mut cache);
+    types::typechecker::infer_ast(root, &mut cache);
 
     if args.is_present("show-types") {
         print_definition_types(&cache);
@@ -143,18 +147,20 @@ pub fn main() {
     if args.is_present("check") {
         return;
     }
+    let root = cache.get_node(root_id);
 
     // Phase 5: Lifetime inference
     util::timing::start_time("Lifetime Inference");
-    lifetimes::infer(ast, &mut cache);
+    lifetimes::infer(root, &mut cache);
 
     if args.is_present("show-lifetimes") {
-        println!("{}", ast);
+        // println!("{}", root);
     }
+    let root = cache.get_node(root_id);
 
     // Phase 6: Codegen
     if error::get_error_count() == 0 {
-        llvm::run(&filename, ast, &mut cache,
+        llvm::run(&filename, root, &mut cache,
                 args.is_present("emit-llvm"),
                 args.is_present("run"),
                 args.is_present("delete-binary"),

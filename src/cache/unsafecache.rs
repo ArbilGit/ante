@@ -34,6 +34,10 @@ impl<'a, T> UnsafeCache<'a, T> {
         self.cache.push(Box::pin(UnsafeCell::new(t)));
         len
     }
+
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
 }
 
 impl<'a, T> Default for UnsafeCache<'a, T> {

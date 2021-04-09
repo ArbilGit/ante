@@ -27,10 +27,16 @@
 //!   `decision_tree: Option<DecisionTree>` for `ast::Match`s
 use crate::lexer::token::{ Token, IntegerKind };
 use crate::error::location::{ Location, Locatable };
-use crate::cache::{ DefinitionInfoId, TraitInfoId, ModuleId, ImplScopeId, TraitBindingId, VariableId };
+use crate::cache::{ ModuleCache, DefinitionInfoId, TraitInfoId,
+    ModuleId, ImplScopeId, TraitBindingId, VariableId };
 use crate::types::{ self, TypeInfoId, LetBindingLevel };
 use crate::types::pattern::DecisionTree;
 use crate::util::reinterpret_as_bits;
+
+use std::borrow::Cow;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct AstId(pub usize);
 
 #[derive(Clone, Debug, Eq, Hash, PartialOrd, Ord)]
 pub enum LiteralKind {
@@ -84,12 +90,22 @@ pub struct Variable<'a> {
     pub typ: Option<types::Type>,
 }
 
+impl<'c> Variable<'c> {
+    pub fn name(&self) -> Cow<str> {
+        match &self.kind {
+            VariableKind::Identifier(name) => Cow::Borrowed(name),
+            VariableKind::TypeConstructor(name) => Cow::Borrowed(name),
+            VariableKind::Operator(token) => Cow::Owned(token.to_string()),
+        }
+    }
+}
+
 /// \a b. expr
 /// Function definitions are also desugared to a ast::Definition with a ast::Lambda as its body
 #[derive(Debug)]
 pub struct Lambda<'a> {
-    pub args: Vec<Ast<'a>>,
-    pub body: Box<Ast<'a>>,
+    pub args: Vec<AstId>,
+    pub body: AstId,
     pub return_type: Option<Type<'a>>,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
@@ -98,15 +114,17 @@ pub struct Lambda<'a> {
 /// foo a b c
 #[derive(Debug)]
 pub struct FunctionCall<'a> {
-    pub function: Box<Ast<'a>>,
-    pub args: Vec<Ast<'a>>,
+    pub function: AstId,
+    pub args: Vec<AstId>,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
 }
 
 impl<'a> FunctionCall<'a> {
-    pub fn is_pair_constructor(&self) -> bool {
-        if let Ast::Variable(variable) = self.function.as_ref() {
+    pub fn is_pair_constructor<'c>(&self, cache: &ModuleCache<'c>) -> bool {
+        let function = cache.get_node(self.function);
+
+        if let Ast::Variable(variable) = function {
             variable.kind == VariableKind::Operator(Token::Comma)
         } else {
             false
@@ -118,8 +136,8 @@ impl<'a> FunctionCall<'a> {
 /// pattern a b = expr
 #[derive(Debug)]
 pub struct Definition<'a> {
-    pub pattern: Box<Ast<'a>>,
-    pub expr: Box<Ast<'a>>,
+    pub pattern: AstId,
+    pub expr: AstId,
     pub mutable: bool,
     pub location: Location<'a>,
     pub level: Option<LetBindingLevel>,
@@ -130,9 +148,9 @@ pub struct Definition<'a> {
 /// if condition then expression else expression
 #[derive(Debug)]
 pub struct If<'a> {
-    pub condition: Box<Ast<'a>>,
-    pub then: Box<Ast<'a>>,
-    pub otherwise: Option<Box<Ast<'a>>>,
+    pub condition: AstId,
+    pub then: AstId,
+    pub otherwise: Option<AstId>,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
 }
@@ -144,8 +162,8 @@ pub struct If<'a> {
 /// | patternN -> branchN
 #[derive(Debug)]
 pub struct Match<'a> {
-    pub expression: Box<Ast<'a>>,
-    pub branches: Vec<(Ast<'a>, Ast<'a>)>,
+    pub expression: AstId,
+    pub branches: Vec<(AstId, AstId)>,
 
     /// The decision tree is outputted from the completeness checking
     /// step and is used during codegen to efficiently compile each pattern branch.
@@ -204,7 +222,7 @@ pub struct TypeDefinition<'a> {
 /// lhs : rhs
 #[derive(Debug)]
 pub struct TypeAnnotation<'a> {
-    pub lhs: Box<Ast<'a>>,
+    pub lhs: AstId,
     pub rhs: Type<'a>,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
@@ -234,14 +252,14 @@ pub struct TraitDefinition<'a> {
     // throws away any names given to parameters. In practice
     // this shouldn't matter until refinement types are implemented
     // that can depend upon these names.
-    pub declarations: Vec<TypeAnnotation<'a>>,
+    pub declarations: Vec<AstId>, //Vec<TypeAnnotation<'a>>,
     pub level: Option<LetBindingLevel>,
     pub location: Location<'a>,
     pub trait_info: Option<TraitInfoId>,
     pub typ: Option<types::Type>,
 }
 
-/// impl TraitName TraitArg1 TraitArg2 ... TraitArgN
+/// impl TraitName TraitArg1 TraitArg2 ... given ... with
 ///     definition1
 ///     definition2
 ///     ...
@@ -252,7 +270,7 @@ pub struct TraitImpl<'a> {
     pub trait_args: Vec<Type<'a>>,
     pub given: Vec<Trait<'a>>,
 
-    pub definitions: Vec<Definition<'a>>,
+    pub definitions: Vec<AstId>, //Vec<Definition<'a>>,
     pub location: Location<'a>,
     pub trait_info: Option<TraitInfoId>,
     pub typ: Option<types::Type>,
@@ -262,7 +280,7 @@ pub struct TraitImpl<'a> {
 /// return expression
 #[derive(Debug)]
 pub struct Return<'a> {
-    pub expression: Box<Ast<'a>>,
+    pub expression: AstId,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
 }
@@ -273,7 +291,7 @@ pub struct Return<'a> {
 /// statementN
 #[derive(Debug)]
 pub struct Sequence<'a> {
-    pub statements: Vec<Ast<'a>>,
+    pub statements: Vec<AstId>,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
 }
@@ -287,7 +305,7 @@ pub struct Sequence<'a> {
 ///     declarationN
 #[derive(Debug)]
 pub struct Extern<'a> {
-    pub declarations: Vec<TypeAnnotation<'a>>,
+    pub declarations: Vec<AstId>, //Vec<TypeAnnotation<'a>>,
     pub level: Option<LetBindingLevel>,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
@@ -296,7 +314,7 @@ pub struct Extern<'a> {
 /// lhs.field
 #[derive(Debug)]
 pub struct MemberAccess<'a> {
-    pub lhs: Box<Ast<'a>>,
+    pub lhs: AstId,
     pub field: String,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
@@ -305,8 +323,8 @@ pub struct MemberAccess<'a> {
 /// lhs := rhs
 #[derive(Debug)]
 pub struct Assignment<'a> {
-    pub lhs: Box<Ast<'a>>,
-    pub rhs: Box<Ast<'a>>,
+    pub lhs: AstId,
+    pub rhs: AstId,
     pub location: Location<'a>,
     pub typ: Option<types::Type>,
 }
@@ -348,105 +366,194 @@ impl PartialEq for LiteralKind {
     }
 }
 
+pub fn id<'a, T>(node: &T, cache: &ModuleCache<'a>) -> AstId {
+    let ptr = node as *const T as usize;
+    let start = cache.nodes.as_ptr() as usize;
+    let end = start + cache.nodes.len() * std::mem::size_of::<Ast>();
+    assert!(start <= ptr && ptr < end);
+
+    AstId((ptr - start) / std::mem::size_of::<Ast>())
+}
+
 /// These are all convenience functions for creating various Ast nodes from the parser
 impl<'a> Ast<'a> {
-    pub fn integer(x: u64, kind: IntegerKind, location: Location<'a>) -> Ast<'a> {
-        Ast::Literal(Literal { kind: LiteralKind::Integer(x, kind), location, typ: None })
+    pub fn id(&self, cache: &ModuleCache<'a>) -> AstId {
+        let ptr = self as *const Ast as usize;
+        let start = cache.nodes.as_ptr() as usize;
+        let end = start + cache.nodes.len() * std::mem::size_of::<Ast>();
+        assert!(start <= ptr && ptr < end);
+
+        AstId((ptr - start) / std::mem::size_of::<Ast>())
     }
 
-    pub fn float(x: f64, location: Location<'a>) -> Ast<'a> {
-        Ast::Literal(Literal { kind: LiteralKind::Float(reinterpret_as_bits(x)), location, typ: None })
+
+    pub fn integer(cache: &mut ModuleCache<'a>, x: u64, kind: IntegerKind, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Literal(Literal
+            { kind: LiteralKind::Integer(x, kind), location, typ: None }
+        ))
     }
 
-    pub fn string(x: String, location: Location<'a>) -> Ast<'a> {
-        Ast::Literal(Literal { kind: LiteralKind::String(x), location, typ: None })
+    pub fn float(cache: &mut ModuleCache<'a>, x: f64, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Literal(Literal
+            { kind: LiteralKind::Float(reinterpret_as_bits(x)), location, typ: None }
+        ))
     }
 
-    pub fn char_literal(x: char, location: Location<'a>) -> Ast<'a> {
-        Ast::Literal(Literal { kind: LiteralKind::Char(x), location, typ: None })
+    pub fn string(cache: &mut ModuleCache<'a>, x: String, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Literal(Literal
+            { kind: LiteralKind::String(x), location, typ: None }
+        ))
     }
 
-    pub fn bool_literal(x: bool, location: Location<'a>) -> Ast<'a> {
-        Ast::Literal(Literal { kind: LiteralKind::Bool(x), location, typ: None })
+    pub fn char_literal(cache: &mut ModuleCache<'a>, x: char, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Literal(Literal
+            { kind: LiteralKind::Char(x), location, typ: None }
+        ))
     }
 
-    pub fn unit_literal(location: Location<'a>) -> Ast<'a> {
-        Ast::Literal(Literal { kind: LiteralKind::Unit, location, typ: None })
+    pub fn bool_literal(cache: &mut ModuleCache<'a>, x: bool, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Literal(Literal
+            { kind: LiteralKind::Bool(x), location, typ: None }
+        ))
     }
 
-    pub fn variable(name: String, location: Location<'a>) -> Ast<'a> {
-        Ast::Variable(Variable { kind: VariableKind::Identifier(name), location, definition: None, id: None, impl_scope: None, trait_binding: None, typ: None })
+    pub fn unit_literal(cache: &mut ModuleCache<'a>, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Literal(Literal
+            { kind: LiteralKind::Unit, location, typ: None }
+        ))
     }
 
-    pub fn operator(operator: Token, location: Location<'a>) -> Ast<'a> {
-        Ast::Variable(Variable { kind: VariableKind::Operator(operator), location, definition: None, trait_binding: None, id: None, impl_scope: None, typ: None })
+    pub fn variable(cache: &mut ModuleCache<'a>, name: String, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Variable(
+            Variable { kind: VariableKind::Identifier(name), location, definition: None, id: None, impl_scope: None, trait_binding: None, typ: None }
+        ))
     }
 
-    pub fn type_constructor(name: String, location: Location<'a>) -> Ast<'a> {
-        Ast::Variable(Variable { kind: VariableKind::TypeConstructor(name), location, definition: None, trait_binding: None, id: None, impl_scope: None, typ: None })
+    pub fn operator(cache: &mut ModuleCache<'a>, operator: Token, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Variable(
+            Variable { kind: VariableKind::Operator(operator), location, definition: None, trait_binding: None, id: None, impl_scope: None, typ: None }
+        ))
     }
 
-    pub fn lambda(args: Vec<Ast<'a>>, return_type: Option<Type<'a>>, body: Ast<'a>, location: Location<'a>) -> Ast<'a> {
+    pub fn type_constructor(cache: &mut ModuleCache<'a>, name: String, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Variable(
+            Variable { kind: VariableKind::TypeConstructor(name), location, definition: None, trait_binding: None, id: None, impl_scope: None, typ: None }
+        ))
+    }
+
+    pub fn lambda(cache: &mut ModuleCache<'a>, args: Vec<AstId>, return_type: Option<Type<'a>>, body: AstId, location: Location<'a>) -> AstId {
         assert!(!args.is_empty());
-        Ast::Lambda(Lambda { args, body: Box::new(body), return_type, location, typ: None })
+        cache.push_node(Ast::Lambda(
+            Lambda { args, body, return_type, location, typ: None }
+        ))
     }
 
-    pub fn function_call(function: Ast<'a>, args: Vec<Ast<'a>>, location: Location<'a>) -> Ast<'a> {
+    pub fn function_call(cache: &mut ModuleCache<'a>, function: AstId, args: Vec<AstId>, location: Location<'a>) -> AstId {
         assert!(!args.is_empty());
-        Ast::FunctionCall(FunctionCall { function: Box::new(function), args, location, typ: None })
+        cache.push_node(Ast::FunctionCall(
+            FunctionCall { function, args, location, typ: None }
+        ))
     }
 
-    pub fn if_expr(condition: Ast<'a>, then: Ast<'a>, otherwise: Option<Ast<'a>>, location: Location<'a>) -> Ast<'a> {
-        Ast::If(If { condition: Box::new(condition), then: Box::new(then), otherwise: otherwise.map(Box::new), location, typ: None })
+    pub fn operator_call(cache: &mut ModuleCache<'a>, operator: Token, args: Vec<AstId>, location: Location<'a>) -> AstId {
+        let operator = Ast::operator(cache, operator, location);
+        Ast::function_call(cache, operator, args, location)
     }
 
-    pub fn match_expr(expression: Ast<'a>, branches: Vec<(Ast<'a>, Ast<'a>)>, location: Location<'a>) -> Ast<'a> {
-        Ast::Match(Match { expression: Box::new(expression), branches, decision_tree: None, location, typ: None })
+    pub fn if_expr(cache: &mut ModuleCache<'a>, condition: AstId, then: AstId, otherwise: Option<AstId>, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::If(
+            If { condition, then, otherwise, location, typ: None }
+        ))
     }
 
-    pub fn type_definition(name: String, args: Vec<String>, definition: TypeDefinitionBody<'a>, location: Location<'a>) -> Ast<'a> {
-        Ast::TypeDefinition(TypeDefinition { name, args, definition, location, type_info: None, typ: None })
+    pub fn match_expr(cache: &mut ModuleCache<'a>, expression: AstId, branches: Vec<(AstId, AstId)>, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Match(
+            Match { expression, branches, decision_tree: None, location, typ: None }
+        ))
     }
 
-    pub fn type_annotation(lhs: Ast<'a>, rhs: Type<'a>, location: Location<'a>) -> Ast<'a> {
-        Ast::TypeAnnotation(TypeAnnotation { lhs: Box::new(lhs), rhs, location, typ: None })
+    pub fn type_definition(cache: &mut ModuleCache<'a>, name: String, args: Vec<String>, definition: TypeDefinitionBody<'a>, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::TypeDefinition(
+            TypeDefinition { name, args, definition, location, type_info: None, typ: None }
+        ))
     }
 
-    pub fn import(path: Vec<String>, location: Location<'a>) -> Ast<'a> {
+    pub fn type_annotation(cache: &mut ModuleCache<'a>, lhs: AstId, rhs: Type<'a>, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::TypeAnnotation(
+            TypeAnnotation { lhs, rhs, location, typ: None }
+        ))
+    }
+
+    pub fn import(cache: &mut ModuleCache<'a>, path: Vec<String>, location: Location<'a>) -> AstId {
         assert!(!path.is_empty());
-        Ast::Import(Import { path, location, typ: None, module_id: None, })
+        cache.push_node(Ast::Import(
+            Import { path, location, typ: None, module_id: None, }
+        ))
     }
 
-    pub fn trait_definition(name: String, args: Vec<String>, fundeps: Vec<String>, declarations: Vec<TypeAnnotation<'a>>, location: Location<'a>) -> Ast<'a> {
+    pub fn trait_definition(cache: &mut ModuleCache<'a>, name: String, args: Vec<String>, fundeps: Vec<String>, declarations: Vec<AstId>, location: Location<'a>) -> AstId {
         assert!(!args.is_empty());
-        Ast::TraitDefinition(TraitDefinition { name, args, fundeps, declarations, location, level: None, trait_info: None, typ: None })
+        cache.push_node(Ast::TraitDefinition(
+            TraitDefinition { name, args, fundeps, declarations, location, level: None, trait_info: None, typ: None }
+        ))
     }
 
-    pub fn trait_impl(trait_name: String, trait_args: Vec<Type<'a>>, given: Vec<Trait<'a>>, definitions: Vec<Definition<'a>>, location: Location<'a>) -> Ast<'a> {
+    pub fn trait_impl(cache: &mut ModuleCache<'a>, trait_name: String, trait_args: Vec<Type<'a>>, given: Vec<Trait<'a>>, definitions: Vec<AstId>, location: Location<'a>) -> AstId {
         assert!(!trait_args.is_empty());
-        Ast::TraitImpl(TraitImpl { trait_name, trait_args, given, definitions, location, trait_arg_types: vec![], trait_info: None, typ: None })
+        cache.push_node(Ast::TraitImpl(
+            TraitImpl { trait_name, trait_args, given, definitions, location, trait_arg_types: vec![], trait_info: None, typ: None }
+        ))
     }
 
-    pub fn return_expr(expression: Ast<'a>, location: Location<'a>) -> Ast<'a> {
-        Ast::Return(Return { expression: Box::new(expression), location, typ: None })
+    pub fn return_expr(cache: &mut ModuleCache<'a>, expression: AstId, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Return(
+            Return { expression, location, typ: None }
+        ))
     }
 
-    pub fn sequence(statements: Vec<Ast<'a>>, location: Location<'a>) -> Ast<'a> {
+    pub fn sequence(cache: &mut ModuleCache<'a>, statements: Vec<AstId>, location: Location<'a>) -> AstId {
         assert!(!statements.is_empty());
-        Ast::Sequence(Sequence { statements, location, typ: None })
+        cache.push_node(Ast::Sequence(
+            Sequence { statements, location, typ: None }
+        ))
     }
 
-    pub fn extern_expr(declarations: Vec<TypeAnnotation<'a>>, location: Location<'a>) -> Ast<'a> {
-        Ast::Extern(Extern { declarations, location, level: None, typ: None })
+    pub fn extern_expr(cache: &mut ModuleCache<'a>, declarations: Vec<AstId>, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Extern(
+            Extern { declarations, location, level: None, typ: None }
+        ))
     }
 
-    pub fn member_access(lhs: Ast<'a>, field: String, location: Location<'a>) -> Ast<'a> {
-        Ast::MemberAccess(MemberAccess { lhs: Box::new(lhs), field, location, typ: None })
+    pub fn member_access(cache: &mut ModuleCache<'a>, lhs: AstId, field: String, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::MemberAccess(
+            MemberAccess { lhs, field, location, typ: None }
+        ))
     }
 
-    pub fn assignment(lhs: Ast<'a>, rhs: Ast<'a>, location: Location<'a>) -> Ast<'a> {
-        Ast::Assignment(Assignment { lhs: Box::new(lhs), rhs: Box::new(rhs), location, typ: None })
+    pub fn assignment(cache: &mut ModuleCache<'a>, lhs: AstId, rhs: AstId, location: Location<'a>) -> AstId {
+        cache.push_node(Ast::Assignment(
+            Assignment { lhs, rhs, location, typ: None }
+        ))
     }
+}
+
+macro_rules! unwrap_node {
+    ( $ast:expr, $node_type:tt ) => {
+        match &mut $ast {
+            $crate::parser::ast::Ast::$node_type(inner) => inner,
+            _ => panic!("Unexpected node type, expected {:?}", stringify!(tt)),
+        }
+    }
+}
+
+macro_rules! unwrap_node_id {
+    ( $ast_id:expr, $node_type:tt, $cache:expr ) => ({
+        let node = $cache.get_node($ast_id);
+        match node {
+            $crate::parser::ast::Ast::$node_type(inner) => inner,
+            _ => panic!("Unexpected node type, expected {:?}", stringify!(tt)),
+        }
+    });
 }
 
 /// A macro for calling a method on every variant of an Ast node.

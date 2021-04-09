@@ -12,6 +12,7 @@
 use crate::lexer::token::{ Token, IntegerKind };
 use crate::error::location::Location;
 use crate::parser::error::{ ParseError, ParseResult };
+use crate::cache::ModuleCache;
 
 pub type Input<'local, 'cache> = &'local[(Token, Location<'cache>)];
 
@@ -24,34 +25,34 @@ macro_rules! seq {
     //
     // This rule specifically is the first bind that occurs, hence why
     // the location here is forwarded to the rest of the macro as the start location.
-    ( $input:ident $location:tt => $name:tt <- $y:expr ; $($rest:tt)* ) => ({
-        let ($input, $name, start) = $y($input)?;
-        seq!($input start start $location => $($rest)*)
+    ( $input:ident $location:tt $cache:tt => $name:tt <- $y:expr ; $($rest:tt)* ) => ({
+        let ($input, $name, start) = $y($input, $cache)?;
+        seq!($input start start $location $cache => $($rest)*)
     });
     // This rule is the nth+1 monadic bind which shadows the previous _end location
     // with a new _end location.
-    ( $input:ident $start:ident $e:ident $location:tt => $name:tt <- $y:expr ; $($rest:tt)* ) => ({
-        let ($input, $name, _end) = $y($input)?;
-        seq!($input $start _end $location => $($rest)*)
+    ( $input:ident $start:ident $e:ident $location:tt $cache:tt => $name:tt <- $y:expr ; $($rest:tt)* ) => ({
+        let ($input, $name, _end) = $y($input, $cache)?;
+        seq!($input $start _end $location $cache => $($rest)*)
     });
     // trace point for debugging:
     // 
     // trace arg;
     // rest
-    ( $input:ident $start:ident $end:ident $location:tt => trace $arg:expr ; $($rest:tt)* ) => ({
+    ( $input:ident $start:ident $end:ident $location:tt $cache:tt => trace $arg:expr ; $($rest:tt)* ) => ({
         println!("trace {} - next = {:?}", $arg, $input[0].clone());
-        seq!($input $start $end $location => $($rest)*)
+        seq!($input $start $end $location $cache => $($rest)*)
     });
     // Mark the expression as no backtracking for better errors:
     // 
     // name !<- parser;
     // rest
-    ( $input:ident $start:ident $e:ident $location:tt => $name:tt !<- $y:expr ; $($rest:tt)* ) => ({
-        let ($input, $name, _end) = no_backtracking($y)($input)?;
-        seq!($input $start _end $location => $($rest)*)
+    ( $input:ident $start:ident $e:ident $location:tt $cache:tt => $name:tt !<- $y:expr ; $($rest:tt)* ) => ({
+        let ($input, $name, _end) = no_backtracking($y)($input, $cache)?;
+        seq!($input $start _end $location $cache => $($rest)*)
     });
     // Finish the seq by wrapping in an Ok
-    ( $input:ident $start:ident $end:ident $location:tt => $expr:expr ) => ({
+    ( $input:ident $start:ident $end:ident $location:tt $cache:tt => $expr:expr ) => ({
         let $location = $start.union($end);
         Ok(($input, $expr, $location))
     });
@@ -73,14 +74,14 @@ macro_rules! seq {
 /// )
 /// ```
 macro_rules! parser {
-    ( $name:ident $location:tt -> $lt:tt $return_type:ty = $($body:tt )* ) => {
-        fn $name<'a, $lt>(input: $crate::parser::combinators::Input<'a, $lt>) -> error::ParseResult<'a, $lt, $return_type> {
-            seq!(input $location => $($body)*)
+    ( $name:ident $location:tt $cache:tt -> $lt:tt $return_type:ty = $($body:tt )* ) => {
+        fn $name<'a, $lt>(input: $crate::parser::combinators::Input<'a, $lt>, $cache: &mut $crate::cache::ModuleCache<$lt>) -> error::ParseResult<'a, $lt, $return_type> {
+            seq!(input $location $cache => $($body)*)
         }
     };
     // Variant with implicit return type of ParseResult<Ast>
-    ( $name:ident $location:tt = $($body:tt )* ) => {
-        parser!($name $location -> 'b Ast<'b> = $($body)* );
+    ( $name:ident $location:tt $cache:tt = $($body:tt )* ) => {
+        parser!($name $location $cache -> 'b AstId = $($body)* );
     };
 }
 
@@ -89,13 +90,13 @@ macro_rules! parser {
 /// should be used in each contained parser once it is sure that parser's rule
 /// should be matched. For example, in an if expression, everything after the initial `if`
 /// should be marked as no_backtracking.
-pub fn or<'local, 'cache: 'local, It, T, F>(functions: It, rule: &'static str) -> impl FnOnce(Input<'local, 'cache>) -> ParseResult<'local, 'cache, T> where
+pub fn or<'local, 'cache: 'local, It, T, F>(functions: It, rule: &'static str) -> impl FnOnce(Input<'local, 'cache>, &mut ModuleCache<'cache>) -> ParseResult<'local, 'cache, T> where
     It: IntoIterator<Item = F>,
-    F: Fn(Input<'local, 'cache>) -> ParseResult<'local, 'cache, T>
+    F: Fn(Input<'local, 'cache>, &mut ModuleCache<'cache>) -> ParseResult<'local, 'cache, T>
 {
-    move |input| {
+    move |input, cache| {
         for f in functions.into_iter() {
-            match f(input) {
+            match f(input, cache) {
                 Ok(c) => return Ok(c),
                 Err(ParseError::Fatal(c)) => return Err(ParseError::Fatal(c)),
                 _ => (),
@@ -112,9 +113,9 @@ pub fn or<'local, 'cache: 'local, It, T, F>(functions: It, rule: &'static str) -
 }
 
 /// Fail if the next token in the stream is not the given expected token
-pub fn expect<'a, 'b: 'a>(expected: Token) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, Token> {
+pub fn expect<'a, 'b: 'a>(expected: Token) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Token> {
     use std::mem::discriminant;
-    move |input| {
+    move |input, _| {
         if discriminant(&expected) == discriminant(&input[0].0) {
             Ok((&input[1..], input[0].0.clone(), input[0].1))
         } else if let Token::Invalid(err) = input[0].0 {
@@ -126,10 +127,10 @@ pub fn expect<'a, 'b: 'a>(expected: Token) -> impl Fn(Input<'a, 'b>) -> ParseRes
 }
 
 /// Fail if the next token in the stream is not the given expected token
-pub fn expect_if<'a, 'b: 'a, F>(rule: &'static str, f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, Token>
+pub fn expect_if<'a, 'b: 'a, F>(rule: &'static str, f: F) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Token>
     where F: Fn(&Token) -> bool
 {
-    move |input| {
+    move |input, _| {
         if f(&input[0].0) {
             Ok((&input[1..], input[0].0.clone(), input[0].1))
         } else if let Token::Invalid(err) = input[0].0 {
@@ -141,11 +142,11 @@ pub fn expect_if<'a, 'b: 'a, F>(rule: &'static str, f: F) -> impl Fn(Input<'a, '
 }
 
 /// Matches the input 0 or 1 times. Only fails if a ParseError::Fatal is found
-pub fn maybe<'a, 'b: 'a, F, T>(f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, Option<T>>
-    where F: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, T>
+pub fn maybe<'a, 'b: 'a, F, T>(f: F) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Option<T>>
+    where F: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, T>
 {
-    move |input| {
-        match f(input) {
+    move |input, cache| {
+        match f(input, cache) {
             Ok((input, result, loc)) => Ok((input, Some(result), loc)),
             Err(ParseError::Fatal(err)) => Err(ParseError::Fatal(err)),
             Err(_) => Ok((input, None, input[0].1)),
@@ -154,27 +155,27 @@ pub fn maybe<'a, 'b: 'a, F, T>(f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a
 }
 
 /// Parse the two functions in a sequence, returning a pair of their results
-pub fn pair<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, (FResult, GResult)> where
-    F: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, FResult>,
-    G: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, GResult>
+pub fn pair<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, (FResult, GResult)> where
+    F: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, FResult>,
+    G: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, GResult>
 {
-    move |input| {
-        let (input, fresult, loc1) = f(input)?;
-        let (input, gresult, loc2) = g(input)?;
+    move |input, cache| {
+        let (input, fresult, loc1) = f(input, cache)?;
+        let (input, gresult, loc2) = g(input, cache)?;
         Ok((input, (fresult, gresult), loc1.union(loc2)))
     }
 }
 /// Match f at least once, then match many0(g, f)
-pub fn delimited<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, Vec<FResult>> where
-    F: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, FResult>,
-    G: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, GResult>
+pub fn delimited<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Vec<FResult>> where
+    F: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, FResult>,
+    G: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, GResult>
 {
-    move |mut input| {
+    move |mut input, cache| {
         let mut results = Vec::new();
         let start = input[0].1;
         let mut end;
 
-        match f(input) {
+        match f(input, cache) {
             Ok((new_input, t, location)) => {
                 input = new_input;
                 end = location;
@@ -184,12 +185,12 @@ pub fn delimited<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> impl Fn(Inpu
         }
 
         loop {
-            match g(input) {
+            match g(input, cache) {
                 Ok((new_input, _, _)) => input = new_input,
                 Err(ParseError::Fatal(token)) => return Err(ParseError::Fatal(token)),
                 Err(_) => break,
             }
-            match f(input) {
+            match f(input, cache) {
                 Ok((new_input, t, location)) => {
                     input = new_input;
                     end = location;
@@ -206,16 +207,16 @@ pub fn delimited<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> impl Fn(Inpu
 }
 
 /// Match delimited(f, g) followed by an optional trailing g
-pub fn delimited_trailing<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, Vec<FResult>> where
-    F: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, FResult>,
-    G: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, GResult>
+pub fn delimited_trailing<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Vec<FResult>> where
+    F: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, FResult>,
+    G: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, GResult>
 {
-    move |mut input| {
+    move |mut input, cache| {
         let mut results = Vec::new();
         let start = input[0].1;
         let mut end;
 
-        match f(input) {
+        match f(input, cache) {
             Ok((new_input, t, location)) => {
                 input = new_input;
                 end = location;
@@ -225,12 +226,12 @@ pub fn delimited_trailing<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> imp
         }
 
         loop {
-            match g(input) {
+            match g(input, cache) {
                 Ok((new_input, _, _)) => input = new_input,
                 Err(ParseError::Fatal(token)) => return Err(ParseError::Fatal(token)),
                 Err(_) => break,
             }
-            match f(input) {
+            match f(input, cache) {
                 Ok((new_input, t, location)) => {
                     input = new_input;
                     end = location;
@@ -247,36 +248,36 @@ pub fn delimited_trailing<'a, 'b: 'a, F, G, FResult, GResult>(f: F, g: G) -> imp
 }
 
 /// Match begin, middle, then end in a sequence.
-pub fn bounded<'a, 'b: 'a, F, FResult>(begin: Token, f: F, end: Token) -> impl FnOnce(Input<'a, 'b>) -> ParseResult<'a, 'b, FResult> where
-    F: FnOnce(Input<'a, 'b>) -> ParseResult<'a, 'b, FResult>,
+pub fn bounded<'a, 'b: 'a, F, FResult>(begin: Token, f: F, end: Token) -> impl FnOnce(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, FResult> where
+    F: FnOnce(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, FResult>,
 {
-    move |input| {
-        let (input, _, _) = expect(begin)(input)?;
-        let (input, result, location) = f(input)?;
-        let (input, _, _) = expect(end)(input)?;
+    move |input, cache| {
+        let (input, _, _) = expect(begin)(input, cache)?;
+        let (input, result, location) = f(input, cache)?;
+        let (input, _, _) = expect(end)(input, cache)?;
         Ok((input, result, location))
     }
 }
 
 /// parenthesized f = bounded '(' f ')'
-pub fn parenthesized<'a, 'b: 'a, F, FResult>(f: F) -> impl FnOnce(Input<'a, 'b>) -> ParseResult<'a, 'b, FResult> where
-    F: FnOnce(Input<'a, 'b>) -> ParseResult<'a, 'b, FResult>,
+pub fn parenthesized<'a, 'b: 'a, F, FResult>(f: F) -> impl FnOnce(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, FResult> where
+    F: FnOnce(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, FResult>,
 {
     bounded(Token::ParenthesisLeft, f, Token::ParenthesisRight)
 }
 
 /// Runs the parser 0 or more times until it errors, then returns a Vec of the successes.
 /// Will only return Err when a ParseError::Fatal is found
-pub fn many0<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, Vec<T>>
-    where F: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, T>
+pub fn many0<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Vec<T>>
+    where F: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, T>
 {
-    move |mut input| {
+    move |mut input, cache| {
         let mut results = Vec::new();
         let start = input[0].1;
         let mut end = start;
 
         loop {
-            match f(input) {
+            match f(input, cache) {
                 Ok((new_input, t, location)) => {
                     input = new_input;
                     end = location;
@@ -292,15 +293,15 @@ pub fn many0<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a
 
 /// Runs the parser 1 or more times until it errors, then returns a Vec of the successes.
 /// Will return Err if the parser fails the first time or a ParseError::Fatal is found
-pub fn many1<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, Vec<T>>
-    where F: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, T>
+pub fn many1<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, Vec<T>>
+    where F: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, T>
 {
-    move |mut input| {
+    move |mut input, cache| {
         let mut results = Vec::new();
         let start = input[0].1;
         let mut end;
 
-        match f(input) {
+        match f(input, cache) {
             Ok((new_input, t, location)) => {
                 input = new_input;
                 end = location;
@@ -310,7 +311,7 @@ pub fn many1<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a
         }
 
         loop {
-            match f(input) {
+            match f(input, cache) {
                 Ok((new_input, t, location)) => {
                     input = new_input;
                     end = location;
@@ -326,11 +327,11 @@ pub fn many1<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a
 
 /// Wraps the parser in a ParseError::Fatal if it fails. Used for better error reporting
 /// around `or` and similar combinators to prevent backtracking away from an error.
-pub fn no_backtracking<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, T>
-    where F: Fn(Input<'a, 'b>) -> ParseResult<'a, 'b, T>
+pub fn no_backtracking<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, T>
+    where F: Fn(Input<'a, 'b>, &mut ModuleCache<'b>) -> ParseResult<'a, 'b, T>
 {
-    move |input| {
-        f(input).map_err(|e| match e {
+    move |input, cache| {
+        f(input, cache).map_err(|e| match e {
             ParseError::Fatal(token) => ParseError::Fatal(token),
             err => ParseError::Fatal(Box::new(err)),
         })
@@ -338,7 +339,7 @@ pub fn no_backtracking<'a, 'b: 'a, T, F>(f: F) -> impl Fn(Input<'a, 'b>) -> Pars
 }
 
 // Basic combinators for extracting the contents of a given token
-pub fn identifier<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, String> {
+pub fn identifier<'a, 'b>(input: Input<'a, 'b>, _cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, String> {
     match &input[0] {
         (Token::Identifier(name), location) => Ok((&input[1..], name.clone(), *location)),
         (Token::Invalid(c), location) => {
@@ -350,7 +351,7 @@ pub fn identifier<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, String> {
     }
 }
 
-pub fn typename<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, String> {
+pub fn typename<'a, 'b>(input: Input<'a, 'b>, _cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, String> {
     match &input[0] {
         (Token::TypeName(name), location) => Ok((&input[1..], name.clone(), *location)),
         (Token::Invalid(c), location) => {
@@ -362,7 +363,7 @@ pub fn typename<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, String> {
     }
 }
 
-pub fn string_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, String> {
+pub fn string_literal_token<'a, 'b>(input: Input<'a, 'b>, _cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, String> {
     match &input[0] {
         (Token::StringLiteral(contents), location) => Ok((&input[1..], contents.clone(), *location)),
         (Token::Invalid(c), location) => {
@@ -374,7 +375,7 @@ pub fn string_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b,
     }
 }
 
-pub fn integer_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, (u64, IntegerKind)> {
+pub fn integer_literal_token<'a, 'b>(input: Input<'a, 'b>, _cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, (u64, IntegerKind)> {
     match input[0] {
         (Token::IntegerLiteral(int, kind), location) => Ok((&input[1..], (int, kind), location)),
         (Token::Invalid(c), location) => {
@@ -386,7 +387,7 @@ pub fn integer_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b
     }
 }
 
-pub fn float_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, f64> {
+pub fn float_literal_token<'a, 'b>(input: Input<'a, 'b>, _cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, f64> {
     match input[0] {
         (Token::FloatLiteral(float), location) => Ok((&input[1..], float, location)),
         (Token::Invalid(c), location) => {
@@ -398,7 +399,7 @@ pub fn float_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, 
     }
 }
 
-pub fn char_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, char> {
+pub fn char_literal_token<'a, 'b>(input: Input<'a, 'b>, _cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, char> {
     match input[0] {
         (Token::CharLiteral(contents), location) => Ok((&input[1..], contents, location)),
         (Token::Invalid(c), location) => {
@@ -410,7 +411,7 @@ pub fn char_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, c
     }
 }
 
-pub fn bool_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, bool> {
+pub fn bool_literal_token<'a, 'b>(input: Input<'a, 'b>, _cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, bool> {
     match input[0] {
         (Token::BooleanLiteral(boolean), location) => Ok((&input[1..], boolean, location)),
         (Token::Invalid(c), location) => {
@@ -422,7 +423,7 @@ pub fn bool_literal_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, b
     }
 }
 
-pub fn int_type_token<'a, 'b>(input: Input<'a, 'b>) -> ParseResult<'a, 'b, IntegerKind> {
+pub fn int_type_token<'a, 'b>(input: Input<'a, 'b>, _cache: &mut ModuleCache<'b>) -> ParseResult<'a, 'b, IntegerKind> {
     match input[0] {
         (Token::IntegerType(kind), location) => Ok((&input[1..], kind, location)),
         (Token::Invalid(c), location) => {

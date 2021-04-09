@@ -24,14 +24,15 @@ impl<'g> Generator<'g> {
     pub fn codegen_tree<'c>(&mut self, tree: &DecisionTree, match_expr: &Match<'c>,
         cache: &mut ModuleCache<'c>) -> BasicValueEnum<'g>
     {
-        let value_to_match = match_expr.expression.codegen(self, cache);
+        let expression = cache.get_node(match_expr.expression);
+        let value_to_match = expression.codegen(self, cache);
 
         // Each Switch case in the tree works by switching on a given value in a DefinitionInfoId
         // then storing each part it extracted into other DefinitionInfoIds and recursing. Thus,
         // the initial value needs to be stored in the first id here since before this there was no
         // extract and store step that would have set the value beforehand.
         if let DecisionTree::Switch(id, _) = tree {
-            let typ = self.follow_bindings(match_expr.expression.get_type().unwrap(), cache);
+            let typ = self.follow_bindings(expression.get_type().unwrap(), cache);
             self.definitions.insert((*id, typ), value_to_match);
         }
 
@@ -66,7 +67,8 @@ impl<'g> Generator<'g> {
                 match branches[*n] {
                     Some(_block) => (),
                     _ => {
-                        self.codegen_branch(&match_expr.branches[*n].1, match_end, cache)
+                        let branch = match_expr.branches[*n].1;
+                        self.codegen_branch(branch, match_end, cache)
                             .map(|(branch, value)| phi.add_incoming(&[(&value, branch)]));
                     }
                 }

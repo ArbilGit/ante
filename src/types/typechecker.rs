@@ -651,23 +651,14 @@ fn infer_nested_definition<'a>(definition_id: DefinitionInfoId, impl_scope: Impl
     let level = LetBindingLevel(CURRENT_LEVEL.load(Ordering::SeqCst));
     let typevar = cache.next_type_variable(level);
     let info = &mut cache.definition_infos[definition_id.0];
-    let definition = info.definition.as_mut().unwrap();
+    let definition = info.definition.as_ref().unwrap();
     // Mark the definition with a fresh typevar for recursive references
     info.typ = Some(typevar.clone());
 
     match definition {
-        DefinitionKind::Definition(definition) => {
-            let definition = trustme::extend_lifetime(*definition);
-            infer(definition, cache);
-        },
-        DefinitionKind::TraitDefinition(definition) => {
-            let definition = trustme::extend_lifetime(*definition);
-            infer(definition, cache);
-        },
-        DefinitionKind::Extern(declaration) => {
-            let definition = trustme::extend_lifetime(*declaration);
-            infer(definition, cache);
-        },
+        DefinitionKind::Definition(definition) => { infer(*definition, cache); },
+        DefinitionKind::TraitDefinition(definition) => { infer(*definition, cache); },
+        DefinitionKind::Extern(declaration) => { infer(*declaration, cache); },
         DefinitionKind::Parameter => {},
         DefinitionKind::MatchPattern => {},
         DefinitionKind::TypeConstructor { .. } => {},
@@ -682,12 +673,13 @@ fn infer_nested_definition<'a>(definition_id: DefinitionInfoId, impl_scope: Impl
 /// that it is indeed irrefutable. If should_generalize is true, this generalizes the type given
 /// to any variable encountered. Appends the given required_traits list in the DefinitionInfo's
 /// required_traits field.
-fn bind_irrefutable_pattern<'a>(ast: &mut ast::Ast<'a>, typ: &Type,
-    required_traits: &Vec<RequiredTrait>, should_generalize: bool, cache: &mut ModuleCache<'a>)
+fn bind_irrefutable_pattern<'a>(ast_id: ast::AstId, typ: &Type, required_traits: &Vec<RequiredTrait>,
+    should_generalize: bool, cache: &mut ModuleCache<'a>)
 {
     use ast::Ast::*;
     use ast::LiteralKind;
 
+    let ast = cache.get_node(ast_id);
     match ast {
         Literal(literal) => {
             match literal.kind {
@@ -715,9 +707,9 @@ fn bind_irrefutable_pattern<'a>(ast: &mut ast::Ast<'a>, typ: &Type,
         },
         TypeAnnotation(annotation) => {
             unify(typ, annotation.typ.as_ref().unwrap(), annotation.location, cache);
-            bind_irrefutable_pattern(annotation.lhs.as_mut(), typ, required_traits, should_generalize, cache);
+            bind_irrefutable_pattern(annotation.lhs, typ, required_traits, should_generalize, cache);
         },
-        FunctionCall(call) if call.is_pair_constructor() => {
+        FunctionCall(call) if call.is_pair_constructor(cache) => {
             let args = fmap(&call.args, |_| next_type_variable(cache));
             let pair_type = Box::new(Type::UserDefinedType(PAIR_TYPE));
 
@@ -727,7 +719,7 @@ fn bind_irrefutable_pattern<'a>(ast: &mut ast::Ast<'a>, typ: &Type,
             match pair_type {
                 Type::TypeApplication(_, args) => {
                     for (element, element_type) in call.args.iter_mut().zip(args) {
-                        bind_irrefutable_pattern(element, &element_type, required_traits, should_generalize, cache);
+                        bind_irrefutable_pattern(*element, &element_type, required_traits, should_generalize, cache);
                     }
                 },
                 _ => unreachable!(),
@@ -757,9 +749,9 @@ fn lookup_definition_type_in_trait<'a>(name: &str, trait_id: TraitInfoId, cache:
 /// The type returned will be that of the named trait member rather than the trait as a whole.
 fn infer_trait_definition<'c>(name: &str, trait_id: TraitInfoId, cache: &mut ModuleCache<'c>) -> Type {
     let trait_info = &mut cache.trait_infos[trait_id.0];
-    match &mut trait_info.trait_node {
-        Some(node) => {
-            infer(trustme::extend_lifetime(*node), cache);
+    match trait_info.trait_node {
+        Some(node_id) => {
+            infer(node_id, cache);
             return lookup_definition_type_in_trait(name, trait_id, cache);
         },
         None => unreachable!("Type for {} has not been filled in yet", name),
@@ -782,11 +774,13 @@ fn infer_trait_definition<'c>(name: &str, trait_id: TraitInfoId, cache: &mut Mod
 ///        the location of the ast in this function, which would just be the entire Definition.
 ///        Additionally, it would give the entire function type instead of just the return
 ///        type or parameter type that was incorrect.
-fn bind_irrefutable_pattern_in_impl<'a>(ast: &ast::Ast<'a>, trait_id: TraitInfoId, typevars_to_replace: &HashMap<TypeVariableId, TypeVariableId>, cache: &mut ModuleCache<'a>) {
+fn bind_irrefutable_pattern_in_impl<'a>(ast_id: ast::AstId, trait_id: TraitInfoId, typevars_to_replace: &HashMap<TypeVariableId, TypeVariableId>, cache: &mut ModuleCache<'a>) {
     use ast::Ast::*;
+
+    let ast = cache.get_node(ast_id);
     match ast {
         Variable(variable) => {
-            let name = variable.to_string();
+            let name = variable.name();
             let trait_type = lookup_definition_type_in_trait(&name, trait_id, cache);
             let trait_type = instantiate_from_map(&trait_type, typevars_to_replace, cache);
 
@@ -795,7 +789,7 @@ fn bind_irrefutable_pattern_in_impl<'a>(ast: &ast::Ast<'a>, trait_id: TraitInfoI
             info.typ = Some(trait_type);
         },
         TypeAnnotation(annotation) => {
-            bind_irrefutable_pattern_in_impl(annotation.lhs.as_ref(), trait_id, typevars_to_replace, cache);
+            bind_irrefutable_pattern_in_impl(annotation.lhs, trait_id, typevars_to_replace, cache);
         },
         _ => {
             error!(ast.locate(), "Invalid syntax in irrefutable pattern in trait impl, expected a name or a tuple of names");
@@ -811,7 +805,7 @@ pub trait Inferable<'a> {
 /// each used function as it is called.
 pub fn infer_ast<'a>(ast: &mut ast::Ast<'a>, cache: &mut ModuleCache<'a>) {
     CURRENT_LEVEL.store(INITIAL_LEVEL, Ordering::SeqCst);
-    let (_, traits) = infer(ast, cache);
+    let (_, traits) = infer(ast.id(cache), cache);
     CURRENT_LEVEL.store(INITIAL_LEVEL - 1, Ordering::SeqCst);
 
     let exposed_traits = traitchecker::resolve_traits(traits, &[], cache);
@@ -819,11 +813,9 @@ pub fn infer_ast<'a>(ast: &mut ast::Ast<'a>, cache: &mut ModuleCache<'a>) {
     assert!(exposed_traits.is_empty());
 }
 
-pub fn infer<'a, T>(ast: &mut T, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints)
-    where T: Inferable<'a> + Typed + std::fmt::Display
-{
+pub fn infer<'a>(mut ast: ast::AstId, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
     let (typ, traits) = ast.infer_impl(cache);
-    ast.set_type(typ.clone());
+    cache.get_node(ast).set_type(typ.clone());
     (typ, traits)
 }
 
@@ -831,6 +823,12 @@ pub fn infer<'a, T>(ast: &mut T, cache: &mut ModuleCache<'a>) -> (Type, TraitCon
 impl<'a> Inferable<'a> for ast::Ast<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
         dispatch_on_expr!(self, Inferable::infer_impl, cache)
+    }
+}
+
+impl<'a> Inferable<'a> for ast::AstId {
+    fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
+        cache.get_node(*self).infer_impl(cache)
     }
 }
 
@@ -915,11 +913,11 @@ impl<'a> Inferable<'a> for ast::Lambda<'a> {
         // The newvars for the parameters are filled out during name resolution
         let arg_types = fmap(&self.args, |_| next_type_variable(cache));
 
-        for (arg, arg_type) in self.args.iter_mut().zip(arg_types.iter()) {
+        for (arg, arg_type) in self.args.iter().copied().zip(arg_types.iter()) {
             bind_irrefutable_pattern(arg, arg_type, &vec![], false, cache);
         }
 
-        let (return_type, traits) = infer(self.body.as_mut(), cache);
+        let (return_type, traits) = infer(self.body, cache);
         (Function(arg_types, Box::new(return_type), false), traits)
     }
 }
@@ -937,8 +935,8 @@ impl<'a> Inferable<'a> for ast::Lambda<'a> {
  */
 impl<'a> Inferable<'a> for ast::FunctionCall<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
-        let (f, mut traits) = infer(self.function.as_mut(), cache);
-        let (args, mut arg_traits) = fmap_mut_pair_flatten_second(&mut self.args, |arg| infer(arg, cache));
+        let (f, mut traits) = infer(self.function, cache);
+        let (args, mut arg_traits) = fmap_pair_flatten_second(&self.args, |arg| infer(arg, cache));
 
         let return_type = next_type_variable(cache);
         traits.append(&mut arg_traits);
@@ -973,7 +971,7 @@ impl<'a> Inferable<'a> for ast::Definition<'a> {
 
         // The rhs of a Definition must be inferred at a greater LetBindingLevel than
         // the lhs below. Here we use level for the rhs and level - 1 for the lhs
-        let (t, traits) = infer(self.expr.as_mut(), cache);
+        let (t, traits) = infer(self.expr, cache);
 
         CURRENT_LEVEL.store(level.0 - 1, Ordering::SeqCst);
 
@@ -981,12 +979,13 @@ impl<'a> Inferable<'a> for ast::Definition<'a> {
         // resolve_traits is called. For now it is sufficient to call bind_irrefutable_pattern
         // twice - the first time with no traits, however in the future bind_irrefutable_pattern
         // should be split up into two parts.
-        bind_irrefutable_pattern(self.pattern.as_mut(), &t, &vec![], false, cache);
+        bind_irrefutable_pattern(self.pattern, &t, &vec![], false, cache);
 
         // Now infer the traits + type of the lhs
-        let typevars_in_fn = find_all_typevars(self.pattern.get_type().unwrap(), false, cache);
+        let pattern_type = cache.get_node(self.pattern).get_type();
+        let typevars_in_fn = find_all_typevars(pattern_type.unwrap(), false, cache);
         let exposed_traits = traitchecker::resolve_traits(traits, &typevars_in_fn, cache);
-        bind_irrefutable_pattern(self.pattern.as_mut(), &t, &exposed_traits, true, cache);
+        bind_irrefutable_pattern(self.pattern, &t, &exposed_traits, true, cache);
 
         // TODO: Can these operations on the LetBindingLevel be simplified?
         CURRENT_LEVEL.store(previous_level, Ordering::SeqCst);
@@ -997,21 +996,24 @@ impl<'a> Inferable<'a> for ast::Definition<'a> {
 
 impl<'a> Inferable<'a> for ast::If<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
-        let (condition, mut traits) = infer(self.condition.as_mut(), cache);
+        let (condition, mut traits) = infer(self.condition, cache);
         let bool_type = Type::Primitive(PrimitiveType::BooleanType);
-        unify(&condition, &bool_type, self.condition.locate(), cache);
 
-        let (then, mut then_traits) = infer(self.then.as_mut(), cache);
+        let condition_location = cache.get_node(self.condition).locate();
+        unify(&condition, &bool_type, condition_location, cache);
+
+        let (then, mut then_traits) = infer(self.then, cache);
         traits.append(&mut then_traits);
 
-        if let Some(otherwise) = &mut self.otherwise {
-            let (otherwise, mut otherwise_traits) = infer(otherwise.as_mut(), cache);
-            traits.append(&mut otherwise_traits);
+        match self.otherwise {
+            None => (Type::Primitive(PrimitiveType::UnitType), traits),
+            Some(otherwise) => {
+                let (otherwise, mut otherwise_traits) = infer(otherwise, cache);
+                traits.append(&mut otherwise_traits);
 
-            unify(&then, &otherwise, self.location, cache);
-            (then, traits)
-        } else {
-            (Type::Primitive(PrimitiveType::UnitType), traits)
+                unify(&then, &otherwise, self.location, cache);
+                (then, traits)
+            }
         }
     }
 }
@@ -1020,25 +1022,29 @@ impl<'a> Inferable<'a> for ast::Match<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
         let error_count = get_error_count();
 
-        let (expression, mut traits) = infer(self.expression.as_mut(), cache);
+        let (expression, mut traits) = infer(self.expression, cache);
         let mut return_type = Type::Primitive(PrimitiveType::UnitType);
 
         if self.branches.len() >= 1 {
             // Unroll the first iteration of inferring (pattern, branch) types so each
             // subsequent (pattern, branch) types can be unified against the first.
-            let (pattern_type, mut pattern_traits) = infer(&mut self.branches[0].0, cache);
+            let (pattern_type, mut pattern_traits) = infer(self.branches[0].0, cache);
             traits.append(&mut pattern_traits);
-            unify(&expression, &pattern_type, self.branches[0].0.locate(), cache);
 
-            let (branch, mut branch_traits) = infer(&mut self.branches[0].1, cache);
+            let pattern_location = cache.get_node(self.branches[0].0).locate();
+            unify(&expression, &pattern_type, pattern_location, cache);
+
+            let (branch, mut branch_traits) = infer(self.branches[0].1, cache);
             return_type = branch;
             traits.append(&mut branch_traits);
 
-            for (pattern, branch) in self.branches.iter_mut().skip(1) {
+            for (pattern, branch) in self.branches.iter().copied().skip(1) {
                 let (pattern_type, mut pattern_traits) = infer(pattern, cache);
                 let (branch_type, mut branch_traits) = infer(branch, cache);
-                unify(&expression, &pattern_type, pattern.locate(), cache);
-                unify(&return_type, &branch_type, branch.locate(), cache);
+                let pattern_location = cache.get_node(pattern).locate();
+                let branch_location = cache.get_node(branch).locate();
+                unify(&expression, &pattern_type, pattern_location, cache);
+                unify(&return_type, &branch_type, branch_location, cache);
                 traits.append(&mut pattern_traits);
                 traits.append(&mut branch_traits);
             }
@@ -1050,7 +1056,8 @@ impl<'a> Inferable<'a> for ast::Match<'a> {
             let mut tree = pattern::compile(self, cache);
             // TODO: Infer new variables created by a decision tree within pattern::compile.
             //       It is done separately currently only for convenience/ease of implementation.
-            tree.infer(self.expression.get_type().unwrap(), self.location, cache);
+            let expression_type = cache.get_node(self.expression).get_type();
+            tree.infer(expression_type.unwrap(), self.location, cache);
             self.decision_tree = Some(tree);
         }
 
@@ -1066,7 +1073,7 @@ impl<'a> Inferable<'a> for ast::TypeDefinition<'a> {
 
 impl<'a> Inferable<'a> for ast::TypeAnnotation<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
-        let (typ, traits) = infer(self.lhs.as_mut(), cache);
+        let (typ, traits) = infer(self.lhs, cache);
         unify(&typ, self.typ.as_mut().unwrap(), self.location, cache);
         (typ, traits)
     }
@@ -1084,10 +1091,11 @@ impl<'a> Inferable<'a> for ast::TraitDefinition<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
         let previous_level = CURRENT_LEVEL.swap(self.level.unwrap().0, Ordering::SeqCst);
         
-        for declaration in self.declarations.iter_mut() {
+        for declaration in self.declarations.iter().copied() {
+            let declaration = unwrap_node_id!(declaration, TypeAnnotation, cache);
             let rhs = declaration.typ.as_ref().unwrap();
 
-            bind_irrefutable_pattern(declaration.lhs.as_mut(), rhs, &vec![], true, cache);
+            bind_irrefutable_pattern(declaration.lhs, rhs, &vec![], true, cache);
         }
 
         CURRENT_LEVEL.store(previous_level, Ordering::SeqCst);
@@ -1122,11 +1130,12 @@ impl<'a> Inferable<'a> for ast::TraitImpl<'a> {
             trait_to_impl.insert(trait_type_variable, impl_type_variable);
         }
 
-        for definition in self.definitions.iter_mut() {
-            bind_irrefutable_pattern_in_impl(definition.pattern.as_ref(), self.trait_info.unwrap(), &trait_to_impl, cache);
+        for definition in self.definitions.iter().copied() {
+            let definition = unwrap_node_id!(definition, Definition, cache);
+            bind_irrefutable_pattern_in_impl(definition.pattern, self.trait_info.unwrap(), &trait_to_impl, cache);
 
             // TODO: Ensure no traits are propogated up that aren't required by the impl
-            infer(definition, cache);
+            infer(ast::id(definition, cache), cache);
         }
 
         (Type::Primitive(PrimitiveType::UnitType), vec![])
@@ -1135,7 +1144,7 @@ impl<'a> Inferable<'a> for ast::TraitImpl<'a> {
 
 impl<'a> Inferable<'a> for ast::Return<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
-        let traits = infer(self.expression.as_mut(), cache).1;
+        let traits = infer(self.expression, cache).1;
         (next_type_variable(cache), traits)
     }
 }
@@ -1145,12 +1154,12 @@ impl<'a> Inferable<'a> for ast::Sequence<'a> {
         let ignore_len = self.statements.len() - 1;
         let mut traits = vec![];
 
-        for statement in self.statements.iter_mut().take(ignore_len) {
+        for statement in self.statements.iter().take(ignore_len).copied() {
             let (_, mut statement_traits) = infer(statement, cache);
             traits.append(&mut statement_traits);
         }
 
-        let (last_statement_type, mut statement_traits) = infer(self.statements.last_mut().unwrap(), cache);
+        let (last_statement_type, mut statement_traits) = infer(*self.statements.last().unwrap(), cache);
         traits.append(&mut statement_traits);
         (last_statement_type, traits)
     }
@@ -1159,8 +1168,9 @@ impl<'a> Inferable<'a> for ast::Sequence<'a> {
 impl<'a> Inferable<'a> for ast::Extern<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
         let previous_level = CURRENT_LEVEL.swap(self.level.unwrap().0, Ordering::SeqCst);
-        for declaration in self.declarations.iter_mut() {
-            bind_irrefutable_pattern(declaration.lhs.as_mut(), declaration.typ.as_ref().unwrap(), &vec![], true, cache);
+        for declaration in self.declarations.iter().copied() {
+            let declaration = unwrap_node_id!(declaration, TypeAnnotation, cache);
+            bind_irrefutable_pattern(declaration.lhs, declaration.typ.as_ref().unwrap(), &vec![], true, cache);
         }
         CURRENT_LEVEL.store(previous_level, Ordering::SeqCst);
         (Type::Primitive(PrimitiveType::UnitType), vec![])
@@ -1183,7 +1193,7 @@ impl<'a> Inferable<'a> for ast::MemberAccess<'a> {
     /// This given trait constraint is a member access constraint denoting that
     /// type a must have a field x of type int.
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
-        let (collection_type, mut traits) = infer(self.lhs.as_mut(), cache);
+        let (collection_type, mut traits) = infer(self.lhs, cache);
 
         let level = LetBindingLevel(CURRENT_LEVEL.load(Ordering::SeqCst));
         let trait_id = cache.get_member_access_trait(&self.field, level);
@@ -1201,8 +1211,8 @@ impl<'a> Inferable<'a> for ast::MemberAccess<'a> {
 
 impl<'a> Inferable<'a> for ast::Assignment<'a> {
     fn infer_impl(&mut self, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints) {
-        let mut traits = infer(self.lhs.as_mut(), cache).1;
-        traits.append(&mut infer(self.rhs.as_mut(), cache).1);
+        let mut traits = infer(self.lhs, cache).1;
+        traits.append(&mut infer(self.rhs, cache).1);
         (Type::Primitive(PrimitiveType::UnitType), traits)
     }
 }

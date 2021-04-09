@@ -1,0 +1,17 @@
+type Contained =
+    foo: i32
+    bar: ref i32
+
+baz () =
+    bar = new 1
+    Contained 0 bar
+
+baz ()
+
+// args: --check --show-lifetimes
+// expected stdout:
+// (type Contained = foo: i32, bar: (ref i32));
+// (baz = \ () .
+//     (bar = (new 1 in r1));
+//     (Contained foo bar));
+// (letregion r1 in (bar ()))

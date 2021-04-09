@@ -1,14 +1,15 @@
 //! Defines a simple pretty printer to print the Ast to stdout.
 //! Used for the golden tests testing parsing to ensure there
 //! are no parsing regressions.
-use crate::parser::ast::{ self, Ast };
-use crate::util::{ fmap, join_with, reinterpret_from_bits };
-use std::fmt::{ self, Display, Formatter };
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+// use crate::parser::ast::{ self, Ast };
+// use crate::util::{ fmap, join_with, reinterpret_from_bits };
+// use std::fmt::{ self, Display, Formatter };
+// use std::sync::atomic::AtomicUsize;
+// use std::sync::atomic::Ordering;
+// 
+// static INDENT_LEVEL: AtomicUsize = AtomicUsize::new(0);
 
-static INDENT_LEVEL: AtomicUsize = AtomicUsize::new(0);
-
+/*
 impl<'a> Display for Ast<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         dispatch_on_expr!(self, Display::fmt, f)
@@ -236,3 +237,4 @@ impl<'a> Display for ast::Assignment<'a> {
         write!(f, "({} := {})", self.lhs, self.rhs)
     }
 }
+*/

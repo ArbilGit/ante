@@ -17,13 +17,13 @@ pub fn fmap<T, U, F>(array: &[T], f: F) -> Vec<U>
 /// What a name! Iterate the array, mapping each element with a function that returns a pair
 /// of a value and a vector. Accumulate the results in two separate vectors, the second of
 /// which is flattened from all the second-element vectors found so far.
-pub fn fmap_mut_pair_flatten_second<T, Ret1, Ret2, F>(array: &mut [T], mut f: F) -> (Vec<Ret1>, Vec<Ret2>)
-    where F: FnMut(&mut T) -> (Ret1, Vec<Ret2>)
+pub fn fmap_pair_flatten_second<T: Copy, Ret1, Ret2, F>(array: &[T], mut f: F) -> (Vec<Ret1>, Vec<Ret2>)
+    where F: FnMut(T) -> (Ret1, Vec<Ret2>)
 {
     let mut ret1 = Vec::with_capacity(array.len());
     let mut ret2 = Vec::with_capacity(array.len());
-    for elem in array.iter_mut() {
-        let (elem1, mut vec) = f(elem);
+    for elem in array {
+        let (elem1, mut vec) = f(*elem);
         ret1.push(elem1);
         ret2.append(&mut vec);
     }
