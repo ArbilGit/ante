@@ -26,6 +26,7 @@ use std::path::{ Path, PathBuf };
 use std::collections::HashMap;
 
 mod unsafecache;
+mod astvec;
 
 /// The ModuleCache is for information needed until compilation is completely finished
 /// (ie. not just for one phase). Accessing each `Vec` inside the `ModuleCache` is done
@@ -42,7 +43,7 @@ pub struct ModuleCache<'a> {
 
     /// Maps AstId -> Ast
     /// Contains all the Asts allocated by the program.
-    pub nodes: Vec<Ast<'a>>,
+    pub nodes: astvec::AstVec<'a>,
 
     /// Used to map paths to parse trees or name resolvers
     pub modules: HashMap<PathBuf, ModuleId>,
@@ -304,7 +305,7 @@ impl<'a> ModuleCache<'a> {
             prelude_path: dirs::config_dir().unwrap().join("stdlib/prelude"),
             // Really wish you could do ..Default::default() for the remaining fields
             modules: HashMap::default(),
-            nodes: Vec::default(),
+            nodes: astvec::AstVec::new(),
             name_resolvers: UnsafeCache::default(),
             filepaths: Vec::default(),
             definition_infos: Vec::default(),
@@ -346,14 +347,12 @@ impl<'a> ModuleCache<'a> {
     }
 
     pub fn push_node(&mut self, ast: Ast<'a>) -> AstId {
-        let len = self.nodes.len();
-        self.nodes.push(ast);
-        AstId(len)
+        self.nodes.push(ast)
     }
 
     pub fn get_node<'b, 'c>(&'b self, id: AstId) -> &'c mut Ast<'a> {
-        let nodes: &mut Vec<Ast<'a>> = crate::util::trustme::make_mut(&self.nodes);
-        nodes.get_mut(id.0).unwrap()
+        let nodes: &mut astvec::AstVec<'a> = crate::util::trustme::make_mut(&self.nodes);
+        nodes.get(id.0)
     }
 
     pub fn push_type_info(&mut self, name: String, args: Vec<TypeVariableId>, location: Location<'a>) -> TypeInfoId {

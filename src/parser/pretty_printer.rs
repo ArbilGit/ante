@@ -1,23 +1,54 @@
 //! Defines a simple pretty printer to print the Ast to stdout.
 //! Used for the golden tests testing parsing to ensure there
 //! are no parsing regressions.
-// use crate::parser::ast::{ self, Ast };
-// use crate::util::{ fmap, join_with, reinterpret_from_bits };
-// use std::fmt::{ self, Display, Formatter };
-// use std::sync::atomic::AtomicUsize;
-// use std::sync::atomic::Ordering;
-// 
-// static INDENT_LEVEL: AtomicUsize = AtomicUsize::new(0);
+use crate::cache::ModuleCache;
+use crate::parser::ast::{ self, Ast };
+use crate::util::reinterpret_from_bits;
+use std::fmt::{ self, Display, Formatter };
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
-/*
-impl<'a> Display for Ast<'a> {
+static INDENT_LEVEL: AtomicUsize = AtomicUsize::new(0);
+
+struct NodePrinter<'local, 'cache> {
+    node: &'local Ast<'cache>,
+    cache: &'local ModuleCache<'cache>,
+}
+
+pub trait MyDisplay {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result;
+}
+
+pub fn print<'c>(node: &Ast<'c>, cache: &ModuleCache<'c>) {
+    let printer = NodePrinter { node, cache };
+    println!("{}", printer);
+}
+
+fn to_string<'c>(node: &Ast<'c>, cache: &ModuleCache<'c>) -> String {
+    let printer = NodePrinter { node, cache };
+    printer.to_string()
+}
+
+impl<'l, 'c> Display for NodePrinter<'l, 'c> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        dispatch_on_expr!(self, Display::fmt, f)
+        MyDisplay::fmt(self.node, f, self.cache)
     }
 }
 
-impl<'a> Display for ast::Literal<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<'a> MyDisplay for Ast<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        dispatch_on_expr!(self, MyDisplay::fmt, f, cache)
+    }
+}
+
+impl MyDisplay for ast::AstId {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        MyDisplay::fmt(cache.get_node(*self), f, cache)
+    }
+}
+
+impl<'a> MyDisplay for ast::Literal<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, _cache: &ModuleCache<'_>) -> fmt::Result {
         use ast::LiteralKind::*;
         match &self.kind {
             Integer(x, _) => write!(f, "{}", x),
@@ -30,8 +61,8 @@ impl<'a> Display for ast::Literal<'a> {
     }
 }
 
-impl<'a> Display for ast::Variable<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<'a> MyDisplay for ast::Variable<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, _cache: &ModuleCache<'_>) -> fmt::Result {
         use ast::VariableKind::*;
         match &self.kind {
             Identifier(name) => write!(f, "{}", name),
@@ -41,53 +72,91 @@ impl<'a> Display for ast::Variable<'a> {
     }
 }
 
-impl<'a> Display for ast::Lambda<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<'a> MyDisplay for ast::Lambda<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
         write!(f, "(\\")?;
         for arg in self.args.iter() {
-            write!(f, " {}", arg)?;
+            let node = cache.get_node(*arg);
+            write!(f, " ")?;
+            MyDisplay::fmt(node, f, cache)?;
         }
         if let Some(typ) = &self.return_type {
-            write!(f, " -> {}", typ)?;
+            write!(f, " -> ")?;
+            MyDisplay::fmt(typ, f, cache)?;
         }
-        write!(f, " . {})", self.body)
+        write!(f, " . ")?;
+        MyDisplay::fmt(cache.get_node(self.body), f, cache)?;
+        write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::FunctionCall<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "({} {})", self.function, join_with(&self.args, " "))
+pub fn join_with<'c, T: MyDisplay>(vec: &[T], delimiter: &str, f: &mut Formatter<'_>, cache: &ModuleCache<'c>) {
+    let len = vec.len();
+    if len == 0 {
+        return;
+    }
+
+    for i in 0 .. len - 1 {
+        MyDisplay::fmt(&vec[i], f, cache).unwrap();
+        write!(f, "{}", delimiter).unwrap();
+    }
+
+    MyDisplay::fmt(&vec[len - 1], f, cache).unwrap();
+}
+
+impl<'a> MyDisplay for ast::FunctionCall<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(")?;
+        MyDisplay::fmt(&self.function, f, cache)?;
+        write!(f, " ")?;
+        join_with(&self.args, " ", f, cache);
+        write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::Definition<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "({} = {})", self.pattern, self.expr)
+impl<'a> MyDisplay for ast::Definition<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(")?;
+        MyDisplay::fmt(&self.pattern, f, cache)?;
+        write!(f, " = ")?;
+        MyDisplay::fmt(&self.expr, f, cache)?;
+        write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::If<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<'a> MyDisplay for ast::If<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(if ")?;
+        MyDisplay::fmt(&self.condition, f, cache)?;
+        write!(f, " then ")?;
+        MyDisplay::fmt(&self.then, f, cache)?;
+
         if let Some(ref otherwise) = self.otherwise {
-            write!(f, "(if {} then {} else {})", self.condition, self.then, otherwise)
-        } else {
-            write!(f, "(if {} then {})", self.condition, self.then)
-        }
-    }
-}
-
-impl<'a> Display for ast::Match<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "(match {}", self.expression)?;
-        for (pattern, branch) in self.branches.iter() {
-            write!(f, " ({} {})", pattern, branch)?;
+            write!(f, " else ")?;
+            MyDisplay::fmt(otherwise, f, cache)?;
         }
         write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::Type<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<'a> MyDisplay for ast::Match<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(match ")?;
+        MyDisplay::fmt(&self.expression, f, cache)?;
+
+        for (pattern, branch) in self.branches.iter() {
+            write!(f, "(")?;
+            MyDisplay::fmt(pattern, f, cache)?;
+            write!(f, " ")?;
+            MyDisplay::fmt(branch, f, cache)?;
+            write!(f, ")")?;
+        }
+        write!(f, ")")
+    }
+}
+
+impl<'a> MyDisplay for ast::Type<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
         use ast::Type::*;
         match self {
             IntegerType(kind, _) => write!(f, "{}", kind),
@@ -100,92 +169,124 @@ impl<'a> Display for ast::Type<'a> {
             TypeVariable(name, _) => write!(f, "{}", name),
             UserDefinedType(name, _) => write!(f, "{}", name),
             FunctionType(params, return_type, varargs, _) => {
-                write!(f, "({} {}-> {})", join_with(params, " "),
-                    if *varargs { "... " } else { "" }, return_type)
+                write!(f, "(")?;
+                join_with(params, " ", f, cache);
+                write!(f, " {}-> ", if *varargs { "... " } else { "" })?;
+                MyDisplay::fmt(return_type.as_ref(), f, cache)?;
+                write!(f, ")")
             },
             TypeApplication(constructor, args, _) => {
-                write!(f, "({} {})", constructor, join_with(args, " "))
+                write!(f, "(")?;
+                MyDisplay::fmt(constructor.as_ref(), f, cache)?;
+                write!(f, " ")?;
+                join_with(args, " ", f, cache);
+                write!(f, ")")
             },
             PairType(first, rest, _) => {
-                write!(f, "({}, {})", first, rest)
+                write!(f, "(")?;
+                MyDisplay::fmt(first.as_ref(), f, cache)?;
+                write!(f, ", ")?;
+                MyDisplay::fmt(rest.as_ref(), f, cache)?;
+                write!(f, ")")
             }
         }
     }
 }
 
-impl<'a> Display for ast::TypeDefinitionBody<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<'a> MyDisplay for ast::TypeDefinitionBody<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
         use ast::TypeDefinitionBody::*;
         match self {
             UnionOf(types) => {
                 for (name, variant_fields, _) in types {
-                    let s = join_with(variant_fields, " ");
-                    write!(f, "| {} {}", name, s)?;
+                    write!(f, "| {} ", name)?;
+                    join_with(variant_fields, " ", f, cache);
                 }
                 Ok(())
             },
             StructOf(types) => {
-                let types = fmap(&types, |(name, ty, _)| format!("{}: {}", name, ty));
-                write!(f, "{}", types.join(", "))
+                for t in types {
+                    MyDisplay::fmt(&t.1, f, cache)?;
+                    write!(f, ", ")?;
+                }
+                Ok(())
             },
-            AliasOf(alias) => write!(f, "{}", alias),
+            AliasOf(alias) => {
+                MyDisplay::fmt(alias, f, cache)
+            }
         }
     }
 }
 
-impl<'a> Display for ast::TypeDefinition<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let args = join_with(&self.args, "");
-        write!(f, "(type {} {} = {})", self.name, args, self.definition)
+impl<'a> MyDisplay for ast::TypeDefinition<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(type {} {} = ", self.name, crate::util::join_with(&self.args, " "))?;
+        MyDisplay::fmt(&self.definition, f, cache)?;
+        write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::TypeAnnotation<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "(: {} {})", self.lhs, self.rhs)
+impl<'a> MyDisplay for ast::TypeAnnotation<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(: ")?;
+        MyDisplay::fmt(&self.lhs, f, cache)?;
+        write!(f, " ")?;
+        MyDisplay::fmt(&self.rhs, f, cache)?;
+        write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::Import<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "(import {})", join_with(&self.path, "."))
+impl<'a> MyDisplay for ast::Import<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, _cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(import {})", crate::util::join_with(&self.path, "."))
     }
 }
 
-impl<'a> Display for ast::TraitDefinition<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "(trait {} {} ", self.name, join_with(&self.args, " "))?;
+impl<'a> MyDisplay for ast::TraitDefinition<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(trait {} {} ", self.name, crate::util::join_with(&self.args, " "))?;
         if !self.fundeps.is_empty() {
-            write!(f, "-> {} ", join_with(&self.fundeps, " "))?;
+            write!(f, "-> {} ", crate::util::join_with(&self.fundeps, " "))?;
         }
-        write!(f, "with\n    {}\n)", join_with(&self.declarations, "\n    "))
+        write!(f, "with\n    ")?;
+        join_with(&self.declarations, "\n    ", f, cache);
+        write!(f, "\n)")
     }
 }
 
-impl<'a> Display for ast::TraitImpl<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let args = join_with(&self.trait_args, " ");
-        let definitions = join_with(&self.definitions, "\n    ");
-        let given = join_with(&self.given, " ");
-        write!(f, "(impl {} {}{}{} with\n    {}\n)", self.trait_name, args,
-            if !given.is_empty() { " given " } else { "" }, given, definitions)
+impl<'a> MyDisplay for ast::TraitImpl<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(impl {} ", self.trait_name)?;
+        join_with(&self.trait_args, " ", f, cache);
+
+        if !self.given.is_empty() {
+            write!(f, " given ")?;
+            join_with(&self.given, " ", f, cache);
+        }
+
+        write!(f, " with\n    ")?;
+        join_with(&self.definitions, "\n    ", f, cache);
+        write!(f, "\n)")
     }
 }
 
-impl<'a> Display for ast::Trait<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let args = join_with(&self.args, " ");
-        write!(f, "({} {})", self.name, args)
+impl<'a> MyDisplay for ast::Trait<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "({} ", self.name)?;
+        join_with(&self.args, " ", f, cache);
+        write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::Return<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "(return {})", self.expression)
+impl<'a> MyDisplay for ast::Return<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(return ")?;
+        MyDisplay::fmt(&self.expression, f, cache)?;
+        write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::Sequence<'a> {
+impl<'a> MyDisplay for ast::Sequence<'a> {
     /// Whenever printing out a Sequence, pretty-print the indented
     /// block as well so that larger programs are easier to read.
     ///
@@ -193,12 +294,12 @@ impl<'a> Display for ast::Sequence<'a> {
     /// the string form of its statements unless this is the top-level
     /// Sequence, in which case we don't want any spaces before the
     /// top-level definitions.
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
         let mut statements = String::new();
         let indent_level = INDENT_LEVEL.fetch_add(1, Ordering::SeqCst);
 
         for (i, statement) in self.statements.iter().enumerate() {
-            let statement = statement.to_string();
+            let statement = to_string(cache.get_node(*statement), cache);
 
             for line in statement.lines() {
                 statements += "\n";
@@ -220,21 +321,28 @@ impl<'a> Display for ast::Sequence<'a> {
     }
 }
 
-impl<'a> Display for ast::Extern<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "(extern\n    {})", join_with(&self.declarations, "\n    "))
+impl<'a> MyDisplay for ast::Extern<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(extern\n    ")?;
+        join_with(&self.declarations, "\n    ", f, cache);
+        write!(f, ")")
     }
 }
 
-impl<'a> Display for ast::MemberAccess<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "({}.{})", self.lhs, self.field)
+impl<'a> MyDisplay for ast::MemberAccess<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(")?;
+        MyDisplay::fmt(&self.lhs, f, cache)?;
+        write!(f, ".{})", self.field)
     }
 }
 
-impl<'a> Display for ast::Assignment<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "({} := {})", self.lhs, self.rhs)
+impl<'a> MyDisplay for ast::Assignment<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>, cache: &ModuleCache<'_>) -> fmt::Result {
+        write!(f, "(")?;
+        MyDisplay::fmt(&self.lhs, f, cache)?;
+        write!(f, " := ")?;
+        MyDisplay::fmt(&self.rhs, f, cache)?;
+        write!(f, ")")
     }
 }
-*/

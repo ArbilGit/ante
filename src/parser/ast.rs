@@ -369,10 +369,11 @@ impl PartialEq for LiteralKind {
 pub fn id<'a, T>(node: &T, cache: &ModuleCache<'a>) -> AstId {
     let ptr = node as *const T as usize;
     let start = cache.nodes.as_ptr() as usize;
-    let end = start + cache.nodes.len() * std::mem::size_of::<Ast>();
+    let end = start + cache.nodes.cap * std::mem::size_of::<Ast>();
+
     assert!(start <= ptr && ptr < end);
 
-    AstId((ptr - start) / std::mem::size_of::<Ast>())
+    AstId((end - ptr) / std::mem::size_of::<Ast>())
 }
 
 /// These are all convenience functions for creating various Ast nodes from the parser
@@ -380,10 +381,11 @@ impl<'a> Ast<'a> {
     pub fn id(&self, cache: &ModuleCache<'a>) -> AstId {
         let ptr = self as *const Ast as usize;
         let start = cache.nodes.as_ptr() as usize;
-        let end = start + cache.nodes.len() * std::mem::size_of::<Ast>();
+        let end = start + cache.nodes.cap * std::mem::size_of::<Ast>();
+
         assert!(start <= ptr && ptr < end);
 
-        AstId((ptr - start) / std::mem::size_of::<Ast>())
+        AstId((end - ptr) / std::mem::size_of::<Ast>())
     }
 
 
@@ -534,15 +536,6 @@ impl<'a> Ast<'a> {
         cache.push_node(Ast::Assignment(
             Assignment { lhs, rhs, location, typ: None }
         ))
-    }
-}
-
-macro_rules! unwrap_node {
-    ( $ast:expr, $node_type:tt ) => {
-        match &mut $ast {
-            $crate::parser::ast::Ast::$node_type(inner) => inner,
-            _ => panic!("Unexpected node type, expected {:?}", stringify!(tt)),
-        }
     }
 }
 

@@ -125,7 +125,7 @@ pub fn main() {
     assert_eq!(root_id, root.id(&cache));
 
     if args.is_present("parse") {
-        // println!("{}", root);
+        parser::pretty_printer::print(root, &cache);
         return;
     }
 
