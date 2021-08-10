@@ -106,13 +106,13 @@ puts (c_string "Hello, C!")
 
 ## String Interpolation
 
-Ante supports string interpolation via `${...}` within a string. Within
+Ante supports string interpolation via `$` or `${...}` within a string. Within
 the brackets, arbitrary expressions will be converted to strings and spliced
 at that position in the string as a whole.
 
 ```ante
 name = "Ante"
-print "Hello, ${name}!"
+print "Hello, $name!"
 //=> Hello, Ante!
 
 offset = 4
@@ -163,7 +163,7 @@ below are exactly equivalent except for their name.
 foo1 a b =
     print (a + b)
 
-foo2 = \a b ->
+foo2 = fn a b ->
     print (a + b)
 ```
 
@@ -195,11 +195,11 @@ even infer which traits are needed in generic function signatures.
 // get either Some element and the rest of the iterator or
 // None and we finish iterating
 trait Iterable it -> elem with
-    next: it -> Maybe (elem, it)
+    next: it -> Maybe (it, elem)
 
 first_equals_two it =
-    match next it with
-    | Some (2, _) -> true
+    match next it
+    | Some (_, 2) -> true
     | _ -> false
 ```
 We never gave any type for `first_equals_two` yet ante infers its type for us as
@@ -389,9 +389,7 @@ if (false and true) or (true and true) then
 
 Since fiddling with individual bits is not a common operation, there
 are no bitwise operators. Instead there are functions in the
-`Bits` module for dealing with bits. If you wish these functions could
-be infix you are in luck - any function taking two arguments can be
-infix using [infix function](#infix-functions) syntax.
+`Bits` module for dealing with bits.
 
 ## Subscript Operator
 
@@ -426,30 +424,6 @@ will see this operator in practice. One place you may see it is with C interop:
 buffer = mut malloc (Mem.sizeof string)
 @buffer := "foo"
 free buffer
-```
-
-## Infix Functions
-
-Any function taking two arguments can be used as an infix function by surrounding
-its name with grave characters: ``` `` ```. Infix functions are left-associative
-and have a high precedence just below `#`.
-
-```ante
-add a b = a + b
-mul = (*)
-
-print (3 `add` 2 `mul` 4)
-//=> print ((3 + 2) * 4)
-
-// Infix function syntax is commonly used with the Bits module
-import Bits
-
-1 `shiftl` 2  //=> 4
-5 `xor` 3     //=> 6
-
-hash += hash `shiftl` 5 + key
-// equivalent to:
-// hash := hash + ((shiftl hash 5) + key)
 ```
 
 ## Pipeline Operators
@@ -517,12 +491,14 @@ in memory (the exact same if you discount allignment differences).
 
 4. More composable: having the right-associative `,` operator means we can
 easily combine pairs or add an element if needed. For example, we can
-implement `zip3` for nested pairs of length 3 in terms of `zip`:
+implement `unzip3` for nested pairs of length 3 in terms of `unzip`:
 
 ```ante
-// given we have zip : (List a) (List b) -> List (a, b)
-zip3 (a: List a) (b: List b) (c: List c) -> List (a, b, c) =
-        zip a (zip b c)
+// given we have unzip : List (a, b) -> List a, List b
+unzip3 (list: List (a, b, c)) -> List a, List b, List c =
+        as, bcs = unzip list
+        bs, cs = unzip bcs
+        as, bs, cs
 ```
 
     - Another place this shows up in is when deconstructing pair values.
@@ -563,17 +539,17 @@ of parenthesis but in ante since tuples are just nested pairs you can just add a
 pairs = [(1, 2), (3, 4)]
 
 // Other languages require deconstructing with nested parenthesis:
-for (i, (one, two)) in enumerate pairs do
-    print "Iteration ${i}: sum = ${one + two}"
+iter (enumerate pairs) fn (i, (one, two)) ->
+    print "Iteration $i: sum = ${one + two}"
 
 // But since `,` is just a normal operator,
 // the following version is equally valid
-for (i, one, two) in enumerate pairs do
-    print "Iteration ${i}: sum = ${one + two}"
+iter (enumerate pairs) fn (i, one, two) ->
+    print "Iteration $i: sum = ${one + two}"
 ```
 
 Finally, its necessary to mention that the earlier `Cast` example printed nested
-pairs as `1, 2, 3` where as the `Show` imple in haskell printed tuples as `(1, 2, 3)`.
+pairs as `1, 2, 3` where as the `Show` instances in haskell printed tuples as `(1, 2, 3)`.
 If we wanted to surround our nested pairs with parenthesis we have to work a bit
 harder by having a helper trait so we can specialize the impl for pairs:
 
@@ -599,7 +575,7 @@ matching on these types to propagate up errors, ante provides the `?` operator.
 By default, an expression `foo ?` is equivalent to:
 
 ```ante
-match cast foo : Result t e with
+match cast foo : Result t e
 | Ok x -> x
 | Err e -> return error e
 ```
@@ -616,11 +592,11 @@ written with and without the `?` operator:
 
 ```ante
 add_even_numbers1 (a: string) (b: string) -> Maybe u64 =
-    n1 = match parse a with
+    n1 = match parse a
         | Ok n -> n
         | Err e -> return None
 
-    n2 = match parse b with
+    n2 = match parse b
         | Ok n -> n
         | Err e -> return None
 
@@ -663,8 +639,8 @@ value. It is similar to the function in pseudocode below:
 
 ```ante
 given Try t ok err
-(!) (f: Args -> t) -> (Args -> ok) = \args ->
-    match cast (f args) with
+(!) (f: Args -> t) -> (Args -> ok) = fn args ->
+    match cast (f args)
     | Ok val -> val
     | Err e -> panic "Tried to unwrap error value ${e}"
 ```
@@ -680,7 +656,7 @@ find_least_cost_neighbor graph =
     get_root graph
     |> unwrap
     |> get_neighbors
-    |> min_by \node. unwrap (node_cost node)
+    |> min_by fn node -> unwrap (node_cost node)
     |> unwrap
 
 // Compared to:
@@ -701,9 +677,9 @@ but usually still less than `?`.
 # Lambdas
 
 Lambdas in ante have a syntax familiar to those used to haskell:
-`\arg1 arg2 ... argN -> body`. Additionally a function definition
+`fn arg1 arg2 ... argN -> body`. Additionally a function definition
 `foo a b c = body` is really just sugar for a variable assigned to
-a lambda: `foo = \a b c -> body`. Lambdas can also capture part of
+a lambda: `foo = fn a b c -> body`. Lambdas can also capture part of
 the variables in the scope they were declared. When they do this,
 they are called closures:
 
@@ -711,7 +687,7 @@ they are called closures:
 augend = 2
 data = 1..100
 
-map data \x. x + augend
+map data fn x -> x + augend
 //=> 3, 4, 5, ..., 100, 101
 ```
 
@@ -724,7 +700,7 @@ would normally go. For example, in the following example, `f1` and `f2` are
 equivalent:
 
 ```ante
-f1 = \x. x + 2
+f1 = fn x -> x + 2
 f2 = _ + 2
 ```
 
@@ -737,7 +713,7 @@ add3 a b c = a + b + c
 g1 = add3 _ 0 _
 
 // g1 is equivalent to:
-g2 = \a c -> add3 a 0 c
+g2 = fn a c -> add3 a 0 c
 ```
 
 Explicit currying only curries the innermost function, so using
@@ -750,7 +726,7 @@ outermost function is expecting another function:
 nested = add3 1 2 (_ + 3)
 
 // To make nested a function, it needs to be rewritten as a lambda:
-nested = \x -> add3 1 2 (x + 3)
+nested = fn x -> add3 1 2 (x + 3)
 
 // Or a function definition
 nested x = add3 1 2 (x + 3)
@@ -783,69 +759,67 @@ if should_print () then
     print three
 ```
 
-Ante also has 2 kinds of loops: while loops and for loops. While loops
-run until their condition is false:
+## Loops
+
+Ante does not include traditional for or while loops since these constructs usually require mutability to be useful. Instead, ante favors recursive functions like map, fold_left, and iter (which iterates over an iterable type, much like foreach loops in most languages):
 
 ```ante
-while input "continue (y/N)?" == "y" do
-    print "Looping!"
+// The type of iter is:
+// iter : a - (elem -> unit) -> unit given Iterator a elem
+
+iter (0..10) print   // prints 0-9 inclusive
+
+iter (enumerate array) fn (index, elem) ->
+    // do something more complex...
+    print result
 ```
 
-Ante does not have do-while loops but they can be emulated by putting
-the computation in the condition block. Since the condition must still
-be at the end of this block we end up with an equivalent loop that runs
-at least once:
+You may notice that there is no way to break or continue out of the iter function. Moreover if you need a more complex loop that a while loop may traditionally provide in other languages, there likely isn’t an already existing iterate function that would suit your need. Other functional languages usually use helper functions with recursion to address this problem:
 
 ```ante
-while
-    command = input "> "
-    execute command
-    command != "exit"
-do ()
+sum numbers =
+    go numbers total =
+        match numbers
+        | Nil -> total
+        | Cons x xs -> go xs (total + x)
+
+    go numbers 0
 ```
 
-For loops in ante loop over anything that is `Iterable`. The basic for loop:
+This can be cumbersome when you just want a quick loop in the middle of a function though. It is for this reason that ante provides the loop and recur keywords which are sugar for an immediately invoked helper function. The following definition of sum is exactly equivalent to the previous:
 
 ```ante
-for x in xs do
-    ...
+sum numbers =
+    loop numbers (total = 0) ->
+        match numbers
+        | Nil -> total
+        | Cons x s -> recur xs (total + x)
 ```
 
-Uses the following `Iterable` and `Iterator` traits:
+After the loop keyword comes a list of variables/patterns which are translated into the parameters of the helper function. If these variables are already defined like numbers is above, then the value of that variable is used for the initial invocation of the helper function. Otherwise, if the variable/pattern isn’t already in scope then it must be supplied an initial value via =, as is the case with total in the above example. The body of the loop becomes the body of the recursive function, with recur standing in for the name of the function.
 
-```ante
-trait Iterable t -> it e given Iterator it e with
-    into_iterator: t -> it
+Since loop/recur uses recursion internally it is even more general than loops, and can be used to translate otherwise complex while loops into ante. Take for example this while loop which builds up a list of the number’s digits, mutating the number as it goes:
 
-trait Iterator it -> e with
-    // Optionally return the next element and rest of the iterator.
-    // If this returns None, the loop is done
-    next: it -> Maybe (e, it)
+```c++
+list<unsigned int> get_digits(unsigned int x) {
+    list<unsigned int> ret;
+    while (x != 0) {
+        unsigned int last_digit = x % 10;
+        ret.push_front(last_digit);
+        x /= 10;
+    }
+    return ret;
+}
 ```
 
-And desugars into an equivalent of the following while loop:
+This can be translated into ante as the following loop:
 
 ```ante
-iterator = mut into_iterator xs
-while true do
-    match next iterator with
-    | None -> break
-    | Some (x, rest) ->
-        iterator := rest
-        ...
-```
-
-As seen above, you can also use `break` (and `continue`) to break out of
-a loop early or to continue to the next iteration. Both take an optional
-integer argument that represents the number of loops to break out of.
-Omitting this defaults it to `1`.
-
-```ante
-for x in 0..1_000_000 do
-    for y in 0..1_000_000 do
-        if x * y == 123456 then
-            print "found pair ${x} and ${y}"
-            break 2
+get_digits (x: u32) -> List u32 =
+    loop x (digits = Nil) ->
+        if x == 0 then return digits
+        last_digit = x % 10
+        recur (x / 10) (Cons last_digit digits)
 ```
 
 ---
@@ -855,7 +829,7 @@ Pattern matching on algebraic data types can be done with a `match`
 expression:
 
 ```ante
-match foo with
+match foo
 | Some bar -> print bar
 | None -> ()
 ```
@@ -867,7 +841,7 @@ or include one that is redundant and will never be matched.
 
 ```ante
 // Error: Missing case: Some None
-match foo with
+match foo
 | Some (Some bar) -> ...
 | None -> ...
 ```
@@ -881,7 +855,7 @@ type IntOrString =
    | Int i32
    | String string
 
-match Int 7 with
+match Int 7
 | Int 3 -> print "Found 3!"
 | Int n if n < 10 -> print "Found a small Int!"
 | String "hello" -> print "Found a greeting!"
@@ -1426,7 +1400,7 @@ You can also use extern with a block of declarations:
 extern
     exit: C.Int -> never_returns
     malloc: usz -> Ptr a
-    printf: C.String ... -> C.Int
+    printf: C.String - ... -> C.Int
 ```
 
 Note that you can also use varargs (`...`) in these declarations

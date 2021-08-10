@@ -4,13 +4,11 @@ description: >
     <div class="highlight-textalign-left"><pre><code class="language/ante" data-lang="ante"><span class="k">given</span> len v1 == len v2
 
     <span class="nf">dotproduct</span> (v1:<span class="kt"> Array u64</span>) (v2:<span class="kt"> Array u64</span>) -> <span class="kt">u64</span> =
-        ret = <span class="k">mut</span> <span class="m">0</span>
-        <span class="k">for</span> i <span class="k">in</span> indices v1 <span class="k">do</span>
-            <span class="c1">// Array access is done with '#' in ante</span>
-            ret += v1#i * v2#i
-        ret
+      <span class="c1">// Sum the products of each element of both arrays</span>
+      products = map2 v1 v2 (*)
+      sum products
 
 
     <span class="nf">dotproduct</span> [<span class="m">1</span>, <span class="m">2</span>, <span class="m">3</span>] [<span class="m">4</span>, <span class="m">5</span>, <span class="m">6</span>]   <span class="c1">//=> 22</span>
 
-    <span class="nf">dotproduct</span> [<span class="m">1</span>, <span class="m">2</span>, <span class="m">3</span>] [<span class="m">4</span>, <span class="m">5</span>]      <span class="c1">//error, lengths aren't equal!</span></code></pre></div>
+    <span class="nf">dotproduct</span> [<span class="m">1</span>, <span class="m">2</span>, <span class="m">3</span>] [<span class="m">4</span>, <span class="m">5</span>]      <span class="c1">//error, failed to prove len [1, 2, 3] == len [4, 5]</span></code></pre></div>

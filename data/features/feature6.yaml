@@ -1,5 +1,5 @@
 weight: 6
 name: "Gradual Memory Management"
 icon: "fa fa-trash"
-description: "To support the largest variety of applications, Ante provides several different methods of memory management, including reference-counted and unique ownership. These are provided in addition to the default region-inference scheme which uses arena allocation internally."
+description: "Ante plans on using lifetime inference for temporary references to help simplify memory management. The design for this isn’t finalized yet though and is subject to change, beware!"
 link: "docs/language/#lifetime-inference"

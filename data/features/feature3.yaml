@@ -1,5 +1,5 @@
 weight: 3
-name: "Robust Module System"
+name: "Simple Module System"
 icon: "fa fa-cube"
-description: "Modules provide an easy way to manage multiple files and reason about large systems.  They also enable faster compilation through caching."
+description: "Ante’s module system mirrors the file tree and is easy to understand and easy to build as a result."
 link: "docs/language/#modules"

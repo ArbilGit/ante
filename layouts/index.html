@@ -61,9 +61,10 @@
                 <div class="lead" text-align="center">
                     Ante is currently in active development and the compiler is in a very early state.
                     In addition, the features listed on this website detail the language itself rather
-                    than the subset that is implemented by the current compiler.  If you are interested
+                    than the subset that is implemented by the current compiler. If you are interested
                     to see which features are implemented, please look at the github page linked below.
-                    Any features not tested in the integration tests are likely to not yet be implemented.
+                    Otherwise, if you just want to see the current design of the language, check out the
+                    <a href="{{ .Site.BaseURL }}docs/language">language tour</a>.
                 </div>
             </div>
         </section>
@@ -76,17 +77,10 @@
                 <h2>Making it easier to read and write faster programs</h2>
 
                 <div class="lead" text-align="center">
-                    Ante is a low-level language just like Rust or C++, but one of ante's main goals
-                    is to make it easier to write fast programs that are still memory-safe. Such code
-                    should be idiomatic and easy to read so that developers can spend as little time
-                    as possible optimizing and more time implementing new features. This is accomplished
-                    primarily through region inference, which automatically infers the lifetime of pointers
-                    and ensures you will never run into a use-after-free, double-free, or forget-to-free
-                    unless you explicitly opt-out by using a different pointer type. Moreover, because
-                    lifetimes are completely inferred, you don't have to be aware of them while programming,
-                    making ante approachable even for developers used to garbage-collected languages. Memory
-                    within a region is arena allocated for the best performance, and regions tend to be
-                    small which helps reduce memory fragmentation.
+                    Ante aims to help bridge the gap between low-level languages like C++/Rust and higher
+                    level garbage-collected languages like Java, OCaml, or Haskell. Another key goal is
+                    experimentation with novel features like refinement type inference, always-incremental
+                    compilation, and lifetime inference.
                 </div>
             </div>
         </section>

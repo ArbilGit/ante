@@ -5,14 +5,14 @@ description: >
 
     <span class="k">trait</span> <span class="kt">Collection c</span> -> <span class="kt">e</span> <span class="k">with</span>
         len: <span class="kt">c</span> -> <span class="kt">usz</span>
-        get: (collection:<span class="kt"> c</span>) (index:<span class="kt"> usz</span>) -> <span class="kt">e</span> <span class="k">given</span> index < len collection
+        get: collection:<span class="kt"> c</span> - index:<span class="kt"> usz</span> -> <span class="kt">e</span> <span class="k">given</span> index < len collection
 
     <span class="k">trait</span> <span class="kt">Show t</span> <span class="k">with</span>
         to_string: <span class="kt">t</span> -> <span class="kt">string</span>
 
     <span class="c1">// Inferred type:
 
-    // elem_to_string: (c: a) (i: usz) -> string
+    // elem_to_string: c: a - i: usz -> string
 
     //    given Collection a b, Show b, i < len c</span>
 

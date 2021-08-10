@@ -1,5 +1,5 @@
 weight: 2
 name: "Expressive"
 icon: "fa fa-chevron-right"
-description: "Idiomatic code is terse and expressive. Common patterns like error handling have sugar in the form of the ? and ! operators which enable readable code where errors are still explicit."
+description: "Common patterns like error handling and looping have syntax sugar to cut down on repetitive code while keeping things explicit."
 link: "docs/language/#try-and"

@@ -1,5 +1,4 @@
 weight: 4
-name: "Integrated Build System"
+name: "Always-Incremental Compilation"
 icon: "fa fa-cubes"
-description: "Build instructions can be specified within the source code itself, no makefile needed.  Additionally, no special syntax is required as it is implemented as a normal library module using Ante's compile-time API."
-link: "docs/language/#modules"
+description: "Incremental compilation metadata is distributed along with source code. This avoids the need for each user to rebuild most libraries or applications."

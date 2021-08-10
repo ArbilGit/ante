@@ -1,15 +1,13 @@
 weight: 5
-title: "Region Inference"
+title: "Lifetime Inference"
 description: >
     <div class="highlight-textalign-left"><pre><span class="k">type</span> <span class="kt">Person</span> = job: <span class="kt">string</span>, name: <span class="kt">ref string</span>
 
 
-    <span class="c1">// Ante uses region inference to infer the data allocated</span>
-
-    <span class="c1">// via `new` should not be freed inside this function</span>
+    <span class="c1">// The data referenced via `&` should not be freed inside this function</span>
 
     make_person job =
-        <span class="kt">Person</span> job (<span class="k">new</span> <span class="s">"bob"</span>)
+        <span class="kt">Person</span> job &<span class="s">"bob"</span>
 
     <span class="c1">// bob is only used at this scope, so it can be safely freed afterward.</span>
 
