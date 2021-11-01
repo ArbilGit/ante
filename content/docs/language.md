@@ -254,6 +254,7 @@ than python and particularly when working the [pipeline operators](#pipeline-ope
 chain of lines ending with `\`:
 
 ```ante
+// x |> f = f x in older versions of ante
 data  \
 |> map (_ + 2) \
 |> filter (_ > 5) \
@@ -310,10 +311,13 @@ data
 |> filter (_ > 5)
 |> max!
 
+// Newer versions of ante use \ instead which helps break old habits
+// and encourage indenting. It also reads slightly better when used
+// for shorter function calls. Compare `vec |> push 4` with `vec\push 4`.
 // Here's the fixed, indented version
 map data (_ + 2)
-    |> filter (_ > 5)
-    |> max!
+    \filter (_ > 5)
+    \max!
 
 // The other examples work as expected
 a = 3 + 2 *
@@ -428,10 +432,11 @@ free buffer
 
 ## Pipeline Operators
 
-The pipeline operators `|>` and `<|` are sugar for function application and
+The pipeline operators `\\` and `$` are sugar for function application and
 serve to pipe the results from one function to the input of another.
 
-`x |> f y` is equivalent to `f x y`. It is left-associative so `x |> f y |> g z`
+`x \f y` is equivalent to `f x y` and functions similar to method syntax
+using `x.f(y)` in object-oriented languages. It is left-associative so `x \f y \g z`
 desugars to `g (f x y) z`. This operator is particularly useful for chaining
 iterator functions:
 
@@ -439,22 +444,22 @@ iterator functions:
 // Parse a csv's data into a matrix of integers
 parse_csv (text: string) -> Vec (Vec i32) =
     lines text
-        |> skip 1  // Skip the column labels line
-        |> split ","
-        |> map parse!
-        |> collect
+        \skip 1  // Skip the column labels line
+        \split ","
+        \map parse!
+        \collect
 ```
 
-In contrast to `|>`, `<|` is right associative and applies a function on its
-left to an argument on its right. It is spelled `$` in haskell. Where `|>`
-is used mostly to spread operations across multiple lines, `<|` is often
+In contrast to `\\`, `$` is right associative and applies a function on its
+left to an argument on its right. Where `\\`
+is used mostly to spread operations across multiple lines, `$` is often
 used for getting rid of parenthesis on one line.
 
 ```ante
 print (sqrt (3 + 1))
 
 // Could also be written as:
-print <| sqrt <| 3 + 1
+print $ sqrt $ 3 + 1
 ```
 
 ## Pair Operator
@@ -654,16 +659,16 @@ less than `unwrap`s do. Here's an example:
 ```ante
 find_least_cost_neighbor graph =
     get_root graph
-    |> unwrap
-    |> get_neighbors
-    |> min_by fn node -> unwrap (node_cost node)
-    |> unwrap
+        \unwrap
+        \get_neighbors
+        \min_by fn node -> unwrap (node_cost node)
+        \unwrap
 
 // Compared to:
 find_least_cost_neighbor graph =
     get_root! graph
-    |> get_neighbors
-    |> min_by! node_cost!
+        \get_neighbors
+        \min_by! node_cost!
 ```
 
 Note that while `!` can conceptually be used for all errors, in practice
@@ -736,8 +741,8 @@ nested x = add3 1 2 (x + 3)
 ```ante
 // Given a matrix of Vec (Vec i32), output a string formatted like a csv file
 map matrix to_string
-|> map (join _ ",") // join columns with commas
-|> join "\n"        // and join rows with newlines.
+  \map (join _ ",") // join columns with commas
+  \join "\n"        // and join rows with newlines.
 ```
 
 ---

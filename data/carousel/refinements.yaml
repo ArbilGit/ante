@@ -1,4 +1,4 @@
-weight: 4
+weight: 1
 title: "Refinement Types"
 description: >
     <div class="highlight-textalign-left"><pre><code class="language/ante" data-lang="ante"><span class="k">given</span> len v1 == len v2

@@ -1,13 +1,13 @@
-weight: 2
+weight: 4
 title: "Iterators"
 description: >
     <div class="highlight-textalign-left"><pre><span class="k">given</span> <span class="kt">Iterable a string</span>
 
     parse_csv (text: <span class="kt">a</span>) -> <span class="kt">Vec</span> (<span class="kt">Vec string</span>) =
         lines text
-        |> skip <span class="m">1</span>
-        |> map (split _ <span class="s">","</span>)
-        |> collect
+            \skip <span class="m">1</span>
+            \map (split _ <span class="s">","</span>)
+            \collect
 
     csv1 = parse_csv (<span class="kt">File</span>.open<span class="k">!</span> <span class="s">"input.csv"</span>)
 

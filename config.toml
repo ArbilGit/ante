@@ -13,7 +13,7 @@ pygmentsCodeFences = true
 newContentEditor = "vim"
 
 [params]
-  description = "The natural way to program something should be both easy and lead to efficient code."
+  description = "For exploring refinement types and lifetime inference"
   author = "jfecher"
   defaultKeywords = ["ante", "programming", "language", "antelang", "lang"]
   style = "red"
@@ -21,7 +21,7 @@ newContentEditor = "vim"
 
 [markup]
   [markup.highlight]
-    guessSyntax = true
+    guessSyntax = false
 
 [menu]
 

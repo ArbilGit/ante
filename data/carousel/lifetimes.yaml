@@ -1,4 +1,4 @@
-weight: 5
+weight: 2
 title: "Lifetime Inference"
 description: >
     <div class="highlight-textalign-left"><pre><span class="k">type</span> <span class="kt">Person</span> = job: <span class="kt">string</span>, name: <span class="kt">ref string</span>
