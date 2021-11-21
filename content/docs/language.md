@@ -1680,7 +1680,7 @@ do_while (body: a -> bool) -> unit can State a =
     if body (do Get) then do_while body
 
 // Loop until we eventually find a prime number through sheer luck
-loop_examples (vec: Vec i32) -> unit can Loop, Print, State i32 =
+loop_examples (vec: Vec i32) -> unit can Print, State i32 =
     for vec fn elem ->
         largest = do Get
         if largest > 100 then
@@ -1698,7 +1698,7 @@ loop_examples (vec: Vec i32) -> unit can Loop, Print, State i32 =
         do Put (x + 2)
         not is_prime (x + 2)
 
-find_random_prime (vec: Vec i32) -> Maybe i32 =
+find_random_prime (vec: Vec i32) -> i32 can Print =
     final_state 0 $$ loop_examples vec
 ```
 
