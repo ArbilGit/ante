@@ -93,7 +93,7 @@ body, .box-simple p, h1, h2, h3, h4 {
 
 /* fix bottom darkmask to match carousel darkmask */
 .bar .dark-mask {
-    background: #da4d4d;
+    background: var(--primary-accent);
     opacity: 0.8;
 }
 

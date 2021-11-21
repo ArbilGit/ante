@@ -6,22 +6,22 @@ theme = "hugo-universal-theme"
 languageCode = "en-us"
 defaultContentLanguage = "en"
 
-pygmentsUseClassic = true
-pygmentsUseClasses = true
-pygmentsCodeFences = true
-
 newContentEditor = "vim"
 
 [params]
-  description = "For exploring refinement types and lifetime inference"
+  description = "For exploring refinement types, lifetime inference, and algebraic effects"
   author = "jfecher"
   defaultKeywords = ["ante", "programming", "language", "antelang", "lang"]
-  style = "red"
   date_format = ""
+  style = "red"
+# default, blue, green, marsala, pink, red, turquoise, violet
 
 [markup]
   [markup.highlight]
-    guessSyntax = false
+    guessSyntax = true
+    noClasses = false
+    style = "monokai"
+    codeFences = true
 
 [menu]
 

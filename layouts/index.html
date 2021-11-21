@@ -1,7 +1,10 @@
 <!DOCTYPE html>
 <html lang="{{ .Site.LanguageCode }}">
 
-  {{ partial "head.html" . }}
+  <head>
+    {{ partial "headers.html" . }}
+    {{ partial "custom_headers.html" . }}
+  </head>
 
   <body>
 
@@ -78,7 +81,7 @@
                     Ante aims to help bridge the gap between low-level languages like C++/Rust and higher
                     level garbage-collected languages like Java, OCaml, or Haskell. Another key goal is
                     experimentation with novel features like refinement type inference, always-incremental
-                    compilation, and lifetime inference.
+                    compilation, lifetime inference, and algebraic effects.
                 </div>
             </div>
         </section>
