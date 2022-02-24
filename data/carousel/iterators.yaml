@@ -7,12 +7,10 @@ description: >
 
     // Some (next_iterator, current_element) or None to stop iterating </span>
 
-    <span class="k">trait</span> <span class="kt">Iterator it elem</span> <span class="k">with</span>
+    <span class="kt">Iterate it elem</span> = <span class="k">trait</span>
         next: <span class="kt">it</span> -> <span class="kt">Maybe</span> (<span class="kt">it</span>, <span class="kt">elem</span>)
 
-    <span class="k">given</span> <span class="kt">Iterator it string</span>
-
-    parse_csv (text: <span class="kt">it</span>) -> <span class="kt">Vec</span> (<span class="kt">Vec string</span>) =
+    parse_csv (text: <span class="kt">it</span>) -> <span class="kt">Vec</span> (<span class="kt">Vec string</span>) <span class="k">can</span> <span class="kt">Iterate it string</span> =
         lines text
             \skip <span class="m">1</span>
             \map (split _ <span class="s">","</span>)
