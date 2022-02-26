@@ -93,7 +93,7 @@ If desired, C-style null-terminated strings can be obtained by calling the `c_st
 print "Hello, World!"
 
 // The string type is equivalent to the following struct:
-string = type
+type string =
     data: Ptr char
     len: usz
 
@@ -194,7 +194,7 @@ even infer which traits are needed in generic function signatures.
 // Something is iterable if we can call `next` on it and
 // get either Some element and the rest of the iterator or
 // None and we finish iterating
-Iterate it -> elem = trait
+trait Iterator it -> elem =
     next: it -> Maybe (it, elem)
 
 first_equals_two it =
@@ -203,7 +203,7 @@ first_equals_two it =
     | _ -> false
 ```
 We never gave any type for `first_equals_two` yet ante infers its type for us as
-`a -> bool can Iterate a i32` - that is a function that returns a `bool` and takes
+`a -> bool with Iterator a i32` - that is a function that returns a `bool` and takes
 a generic parameter of type `a` which must be an iterator producing elements of type `i32`.
 
 ---
@@ -339,29 +339,29 @@ standard one's you're probably used to:
 
 ```ante
 // The standard set of numeric ops with operator precedence as you'd expect
-Add a = trait
+trait Add a with
     (+): a -> a -> a
 
-Sub a = trait
+trait Sub a with
     (-): a -> a -> a
 
-Mul a = trait
+trait Mul a with
     (*): a -> a -> a
 
-Div a = trait
+trait Div a with
     (/): a -> a -> a
 
 // % is modulus, not remainder. So -3 % 5 == 2
-Mod a = trait
+trait Mod a with
     (%): a -> a -> a
 ```
 
 ```ante
 // Comparison operators are implemented in terms of the `Cmp` trait
-Cmp a = trait
+trait Cmp a with
     compare: a -> a -> Ordering
 
-Ordering = type | Lesser | Equal | Greater
+type Ordering = | Lesser | Equal | Greater
 
 (<) a b = compare a b == Lesser
 (>) a b = compare a b == Greater
@@ -411,24 +411,12 @@ average_first_two array =
     (array#0 + array#1) / 2
 ```
 
-## Dereference Operator
+## No Dereference Operator
 
-Dereferencing pointers in ante can be done via the `@` operator which
-gives you the value "at" that location. Ante uses this over the traditional
-unary `*` to avoid overloading `*` with too many meanings.
-
-Note that there is no C/C++-like `->` operator for dereferencing a struct
-to get its field. `struct.field` in ante will work as expected regardless
-of if `struct` is indeed a struct or is a pointer to a struct.
-
-Raw-pointer dereferencing is not done often in ante so it is rare you
-will see this operator in practice. One place you may see it is with C interop:
-
-```ante
-buffer = mut malloc (Mem.sizeof string)
-@buffer := "foo"
-free buffer
-```
+Dereferencing pointers in ante is somewhat uncommon, so ante provides no pointer
+dereference operator. Instead, you can use the `deref` function in the standard library.
+If you need to access a stuct field, `struct.field` in will work as expected regardless 
+of whether `struct` is a struct or a pointer to a struct.
 
 ## Pipeline Operators
 
@@ -476,7 +464,7 @@ system. Instead, they can be defined as a normal struct type in the standard
 library:
 
 ```ante
-Pair a b = type first: a, second: b
+type Pair a b = first: a, second: b
 ```
 
 2. Easier to work with: Because pairs are just normal data types, we get
@@ -564,7 +552,7 @@ harder by having a helper trait so we can specialize the impl for pairs:
 cast_pair_string = impl
     cast pair = "(${to_string_helper pair})"
 
-ToStringHelper t = trait
+trait ToStringHelper t with
     to_string_helper (x: t) -> string = cast x
 
 // Specialize the impl for pairs so we can recurse on the rhs
@@ -590,7 +578,7 @@ match cast foo : Result t e
 which uses the `try` trait:
 
 ```ante
-Try t -> ok err = trait
+trait Try t -> ok err with
     with Cast t (Result ok err)
     error: err -> t
 ```
@@ -646,7 +634,7 @@ returns a function taking the same arguments but returning only the non-error
 value. It is similar to the function in pseudocode below:
 
 ```ante
-(!) (f: Args -> t) -> (Args -> ok) can Try t ok err =
+(!) (f: Args -> t) -> (Args -> ok) with Try t ok err =
     fn args ->
         match cast (f args)
         | Ok val -> val
@@ -773,7 +761,7 @@ Ante does not include traditional for or while loops since these constructs usua
 
 ```ante
 // The type of iter is:
-// iter : a -> (elem -> unit) -> unit can Iterate a elem
+// iter : a -> (elem -> unit) -> unit with Iterator a elem
 
 iter (0..10) print   // prints 0-9 inclusive
 
@@ -859,7 +847,7 @@ also include literals and guards in our patterns and it will work as
 we expect:
 
 ```ante
-IntOrString = type
+type IntOrString =
    | Int i32
    | String string
 
@@ -895,16 +883,16 @@ return possibly null values.
 ## Type Definitions
 
 Both struct and tagged union types can be defined with the
-`Name args = type ...`construct where `args` is the space-separated
+`type Name args = ...`construct where `args` is the space-separated
 list of type variables the type is generic over.
 
 You can define struct types with commas separating each field or
 newlines if the type spans multiple lines:
 
 ```ante
-Person = type name: string, age: u8
+type Person = name: string, age: u8
 
-Vec a = type
+type Vec a =
     data: Ptr [a]
     len: usz
     capacity: usz
@@ -915,11 +903,11 @@ The `|` before the first variant is mandatory. Ante currently has
 no support for untagged C unions.
 
 ```ante
-Maybe t = type
+type Maybe t =
    | Some t
    | None
 
-Result t e = type
+type Result t e =
    | Ok t
    | Err e
 ```
@@ -947,7 +935,7 @@ parse_and_print_int (s: string) -> unit =
 
 Refinement types are an additional boolean constraint on a normal type.
 For example, we may have an integer type that must be greater than 5.
-This is written as `x: i32 & x > 5`. These refinements can be
+This is written as `x: i32 where x > 5`. These refinements can be
 written anywhere after a type is expected, and are mostly restricted
 to numbers or "uninterpreted functions." This limitation is so we can
 infer these refinements like normal types. If we instead allow any value
@@ -957,7 +945,7 @@ inference and basic type checking (without manual proofs) is undecidable.
 Refinement types can be used to ensure indexing into a vector is always valid:
 
 ```ante
-get (a: Vec t) (index: usz & index < len a) -> t = ...
+get (a: Vec t) (index: usz where index < len a) -> t = ...
 
 a = [1, 2, 3]
 get a 2  // valid
@@ -978,17 +966,17 @@ to only sorted vectors:
 
 ```ante
 // You can name a return type for use in refinements
-sort (vec: Vec t) -> ret: Vec t & sorted ret = ...
+sort (vec: Vec t) -> ret: Vec t where sorted ret = ...
 
-binary_search (vec: Vec t & sorted vec) (elem: t) -> Maybe (index: usz & index < len vec) = ...
+binary_search (vec: Vec t where sorted vec) (elem: t) -> Maybe (index: usz where index < len vec) = ...
 ```
 
 Type aliases can be used to cut down on the annotations:
 
 ```ante
-SortedVec t = a: Vec t & sorted a
+SortedVec t = a: Vec t where sorted a
 
-Index vec = x:usz & x < len vec
+Index vec = x:usz where x < len vec
 
 sort (vec: Vec t) -> SortedVec t = ...
 
@@ -1008,7 +996,7 @@ have certain operations available on them - like adding. In ante, this
 is done via traits. You can define a trait as follows:
 
 ```ante
-Stringify t = trait
+trait Stringify t with
     stringify: t -> string
 ```
 
@@ -1017,12 +1005,12 @@ With this, we can write another function that can abstract over all `t`'s that
 can be converted to strings:
 
 ```ante
-stringify_print (x: t) -> unit can Stringify t =
+stringify_print (x: t) -> unit with Stringify t =
     print (stringify x)
 ```
 
 Just like types and algebraic effects, we can leave out all our traits
-in the `can` clauses and they can still be inferred.
+in the `with` clauses and they can still be inferred.
 
 Traits can also define relations over multiple types. For example,
 we may want to be more general than the `Stringify` cast above -
@@ -1032,7 +1020,7 @@ such that there must be a cast function that can cast from the
 first to the second:
 
 ```ante
-Cast a b = trait
+trait Cast a b with
     cast: a -> b
 
 // We can cast to a string using
@@ -1089,7 +1077,7 @@ We can start out with a trait similar to our `Cast` trait from
 before:
 
 ```ante
-Container c elem = trait
+trait Container c elem with
     get: c -> usz -> Maybe elem
 ```
 
@@ -1114,7 +1102,7 @@ specify that for any given type `c`, there's only 1 valid
 `elem` value. We can do that by adding an `->`:
 
 ```ante
-Container c -> elem = trait
+trait Container c -> elem with
     get: c -> usz -> Maybe elem
 
 vec_container = impl
@@ -1174,7 +1162,7 @@ operations with the type used which can be annoying. Imagine
 Instead, integer literals are polymorphic over the `Int` trait:
 
 ```ante
-Int a = trait
+trait Int a with
     // no operations, this trait is built into
     // the compiler and is used somewhat like a typetag
 ```
@@ -1184,7 +1172,7 @@ keeps its generic type. This sometimes pops up in function signatures:
 
 ```ante
 // This works with any integer type
-add1 (x: a) -> a can Int a =
+add1 (x: a) -> a with Int a =
     x + 1
 ```
 
@@ -1195,7 +1183,8 @@ constraint - ie it must be a primitive integer or we get a compile-time error).
 
 ```ante
 // Fine, we're still generic over a
-foo () -> a can Int a = 0
+foo () -> a with Int a =
+    0
 
 x: i32 = 1  // also fine, we constrained 1 : i32 now
 
@@ -1208,9 +1197,9 @@ y = 2u16  // still fine, now we're specifying the type
 If we have multiple types with the same field in scope:
 
 ```ante
-A = type foo: i32
+type A = foo: i32
 
-B = type foo: string
+type B = foo: string
 ```
 
 Then we are left with the problem of deciding what the type
@@ -1228,7 +1217,7 @@ sees an expression like `x.foo` it makes a new trait like
 the following pseudocode:
 
 ```ante
-.foo struct -> field = trait
+trait .foo struct -> field with
     (.foo) : struct -> field
 ```
 
@@ -1236,7 +1225,7 @@ Now we can type `get_foo` as a function which takes
 any value of type `a` that has a field named `foo` of type `b`:
 
 ```ante
-get_foo (x: a) -> b can .foo a b =
+get_foo (x: a) -> b with .foo a b =
     x.foo
 ```
 
@@ -1340,7 +1329,7 @@ rust however: to accomplish this hands-off approach ante typically
 infers `ref`s to live longer than they need to.
 
 `ref`s can be created with `new : a -> ref a` and the underlying
-value can be accessed with `(@) : ref a -> a`. Here's a simple
+value can be accessed with `deref : ref a -> a`. Here's a simple
 example 
 
 ```ante
@@ -1376,7 +1365,7 @@ lifetime. Perhaps a more standard operation is to just use them as
 temporary references:
 
 ```ante
-VeryLarge = type ...
+type VeryLarge = ...
 
 some_operation (x: ref VeryLarge) (n: i32) -> Result i32 string
     ... // do things with x
@@ -1463,7 +1452,7 @@ with the value to resume with. The type of value needed to resume depends on
 the return type of the effect. For example, if our effect is:
 
 ```an
-GiveInt = effect
+effect GiveInt with
     give_int: string -> i32
 ```
 
@@ -1474,7 +1463,7 @@ expression. For example, if we want to write a handler for the `GiveInt` effect 
 we may write a function like:
 
 ```an
-handle_give_int (f: unit -> a can GiveInt) -> a =
+handle_give_int (f: unit -> a with GiveInt) -> a =
     handle f ()
     | give_int str ->
         if str == "zero"
@@ -1486,7 +1475,7 @@ Finally, if we have a function `do_math` which uses the `GiveInt` effect, here's
 how we'd pass it to `handle_give_int` to properly handle the effect:
 
 ```an
-do_math (x: i32) -> i32 can GiveInt =
+do_math (x: i32) -> i32 with GiveInt =
     a = give_int "zero"
     b = give_int "foo"
     x + a + b
@@ -1495,26 +1484,18 @@ handle_give_int (fn () -> do_math 3)  //=> 126
 ```
 
 You'll notice `handle_give_int` expects a function, so we have to wrap `do_math 3` in a
-lambda before we pass it into our handler. Since this operation is so common, there
-are special versions of the `.` and `$` operators which wrap their non-function argument
-in a lambda, but otherwise are equivalent to the standard `.` and `$` operators. Here
-are the definitions of the new operators in pseudocode:
+lambda before we pass it into our handler. Since this operation is so common, ante provides
+the `with` operator which will wrap it's left argument in a lambda and pass it to the function
+on its right. Here is the definition of `with` in pseudocode:
 
 ```ante
-a $$ b
-    = a $ (fn () -> b)
-    = a (fn () -> b)
-
 a with b
-    = (fn () -> a) . b
     = b (fn () -> a)
 ```
 
-With these we can rewrite the last line as:
+With this we can rewrite the last line as:
 
 ```an
-handle_give_int $$ do_math 3
-// or
 do_math 3 with handle_give_int
 ```
 
@@ -1528,11 +1509,11 @@ to be defined for any effect. As an example, lets define another handler
 for `GiveInt` in addition to `handle_give_int`:
 
 ```an
-with_int (int: i32) (f: unit -> a can GiveInt) -> a =
+the_int (int: i32) (f: unit -> a with GiveInt) -> a =
     handle f ()
     | give_int _ -> resume int
 
-with_int 5 $$ do_math 1  //=> 11
+do_math 1 with the_int 5  //=> 11
 ```
 
 ### Matching on the Returned Value
@@ -1541,13 +1522,13 @@ Handle expressions can also match on the return value
 of the handled expression
 
 ```an
-count_giveint_calls (f: unit -> a can GiveInt) -> i32 =
+count_giveint_calls (f: unit -> a with GiveInt) -> i32 =
     handle f ()
     | return x -> 0
     | give_int _ -> 1 + resume 0
 
 
-count_giveint_calls $$ do_math 5  //=> 2
+do_math 5 with count_giveint_calls  //=> 2
 ```
 
 This example can be confusing at first - how can we always return
@@ -1556,7 +1537,7 @@ says it returns some type `a`? Lets work this out step by step
 to see how it expands:
 
 ```ante
-count_giveint_calls $$ do_math 5
+do_math 5 with count_giveint_calls
 
 // First we expand and substitute
 handle
@@ -1600,7 +1581,7 @@ can call it multiple times, or pass it to higher-order functions
 like `map` and `flatmap`:
 
 ```an
-these_ints (f: unit -> a can GiveInt) (ints: Vec i32) -> Vec a =
+these_ints (f: unit -> a with GiveInt) (ints: Vec i32) -> Vec a =
     handle f ()
     | return x -> [x]
     | give_int _ -> flatmap ints resume
@@ -1620,7 +1601,7 @@ Handlers may also choose not to resume at all, simply by
 not calling `resume`:
 
 ```an
-interpret (default_value: a) (f: unit -> a can GiveInt) -> a =
+interpret (default_value: a) (f: unit -> a with GiveInt) -> a =
     import Random.random
     handle f ()
     | give_int "zero" -> resume 0
@@ -1628,7 +1609,7 @@ interpret (default_value: a) (f: unit -> a can GiveInt) -> a =
     // Do not resume, return the default value instead
     | give_int _ -> default_value
 
-interpret 42 $$ do_math 7  //=> 42
+do_math 7 with interpret 42  //=> 42
 ```
 
 ## Useful Effects
@@ -1642,17 +1623,17 @@ Algebraic Effects can be used to emulate mutable state - automatically
 threading stateful values through multiple functions.
 
 ```ante
-State a = effect
+effect State a with
     get: unit -> a
     put: a -> unit
 
-with_state (state: s) (f: unit -> a can State s) -> a =
+state (current_state: s) (f: unit -> a with State s) -> a =
     handle f ()
-    | put x -> with_state x $$ resume ()
-    | get () -> with_state state $$ resume state
+    | put new_state -> resume () with state new_state
+    | get () -> resume current_state with state current_state
 
 
-Expr = type
+type Expr =
    | Int i32
    | Var string
    | Add Expr Expr
@@ -1660,15 +1641,15 @@ Expr = type
 
 Eval = State (Map string i32)
 
-lookup (name: string) -> Maybe i32 can Eval =
+lookup (name: string) -> Maybe i32 with Eval =
     map = get ()
     map.get name
 
-define (name: string) (value: i32) -> unit can Eval =
+define (name: string) (value: i32) -> unit with Eval =
     map = get ()
     put (map.insert name value)
 
-eval (expr: Expr) -> i32 can Eval =
+eval (expr: Expr) -> i32 with Eval =
     match expr
     | Int x -> x
     | Var s -> lookup s .or_error "$s not defined"
@@ -1679,7 +1660,7 @@ eval (expr: Expr) -> i32 can Eval =
 
 main () =
     e = Let "foo" (Int 1) (Add (Var "foo") (Int 2))
-    with_state Map.empty $$ eval e  //=> 3
+    eval e with state Map.empty  //=> 3
 ```
 
 Note that compared to the monadic approach, we do not
@@ -1696,7 +1677,7 @@ whether a function requires such a context or not can be inferred,
 removing a context from a function no longer requires manually removing
 function arguments from every call site of that function. We gain all
 this while still keeping the use of a context explicit in the function's
-signature. We know any function marked `can Eval` will
+signature. We know any function marked `with Eval` will
 make use of this context and potentially modify it. If we wanted to
 separate these two notions, we could split `Get` and `Put` into different
 effects instead of including them both in a `State` effect
@@ -1710,11 +1691,11 @@ or `Continue` lets us program in a very imperative style,
 while remaining purely functional behind the scenes.
 
 ```an
-Loop = effect
+effect Loop with
     break: unit -> a
     continue: unit -> a
 
-for (iter: i) (f: e -> unit can Loop) -> unit can Iterate i e =
+for (iter: i) (f: e -> unit with Loop) -> unit with Iterate i e =
     match next iter
     | None -> ()
     | Some (rest, elem) ->
@@ -1724,16 +1705,16 @@ for (iter: i) (f: e -> unit can Loop) -> unit can Iterate i e =
         // If the body returns normally, we also want to continue the loop
         | return _ -> for rest f
 
-while (cond: a -> bool) (body: a -> unit) -> unit can State a =
+while (cond: a -> bool) (body: a -> unit) -> unit with State a =
     if cond (get ()) then
         body (get ())
         while cond body
 
-do_while (body: a -> bool) -> unit can State a =
+do_while (body: a -> bool) -> unit with State a =
     if body (get ()) then do_while body
 
 // Loop until we eventually find a prime number through sheer luck
-loop_examples (vec: Vec i32) -> unit can Print, State i32 =
+loop_examples (vec: Vec i32) -> unit with Print, State i32 =
     for vec fn elem ->
         largest = get ()
         if largest > 100 then
@@ -1751,8 +1732,8 @@ loop_examples (vec: Vec i32) -> unit can Print, State i32 =
         put (x + 2)
         not is_prime (x + 2)
 
-find_random_prime (vec: Vec i32) -> i32 can Print =
-    final_state 0 $$ loop_examples vec
+find_random_prime (vec: Vec i32) -> i32 with Print =
+    loop_examples vec with final_state 0
 ```
 
 ### Generators
@@ -1760,25 +1741,25 @@ find_random_prime (vec: Vec i32) -> i32 can Print =
 The yield effect provides a way to implement generators.
 
 ```ante
-Yield a = effect
+effect Yield a with
     yield: unit -> a
 
-traverse (xs: List Int) -> unit can Yield Int =
+traverse (xs: List Int) -> unit with Yield Int =
     match xs
     | Cons x xs -> yield x; traverse xs
     | None -> ()
 
-filter (k: unit -> a can Yield b) (f: b -> bool) -> a can Yield b =
+filter (k: unit -> a with Yield b) (f: b -> bool) -> a with Yield b =
     handle k ()
     | yield x ->
         if f x then yield x
         resume ()
 
-iter (k: unit -> a can Yield b) (f: b -> unit) -> a =
+iter (k: unit -> a with Yield b) (f: b -> unit) -> a =
     handle k ()
     | yield x -> resume (f x)
 
-yield_to_list (k: unit -> a can Yield b) -> List b =
+yield_to_list (k: unit -> a with Yield b) -> List b =
     handle k ()
     | return _ -> []
     | yield x -> Cons x (resume ())
@@ -1806,13 +1787,13 @@ us to swap out the behavior of side-effectful operations to
 mock them for testing.
 
 ```an
-Print = effect
+effect Print with
     print: string -> unit
 
-QueryDatabase = effect
+effect QueryDatabase with
     querydb: string -> Response
 
-with_database f =
+database f =
     db = Database.connect "..."
     result = handle f ()
         | querydb msg -> resume (send db msg)
@@ -1823,7 +1804,7 @@ ignore_db f =
     handle f ()
     | querydb _ -> Response.empty
 
-business_logic (should_query: bool) -> unit can Print, QueryDatabase =
+business_logic (should_query: bool) -> unit with Print, QueryDatabase =
     if should_query then
         print "querying..."
         response = querydb "SELECT column FROM table"
@@ -1833,11 +1814,11 @@ business_logic (should_query: bool) -> unit can Print, QueryDatabase =
         print "did not query"
 
 // Print effect handling is builtin, let ante handle it
-main () can Print =
-    with_database $$ business_logic true
+main () with Print =
+    business_logic true with database
 
 // Mock our business function. Use a different handler for
-// testing instead of the with_database handler that will actually
+// testing instead of the database handler that will actually
 // connect to the database.
 test () =
     handle business_logic false
@@ -1845,7 +1826,7 @@ test () =
     | querydb _ ->
         error "Tried to query when should_query = false!"
 
-    logs = collect_prints $$ ignore_db $$ business_logic true
+    logs = business_logic true with ignore_db with collect_prints
     assert (not is_empty logs)
 ```
 
@@ -1856,7 +1837,7 @@ to compute the expected value of numerical functions which internally
 use an effect like `Flip` to decide on branches to take within the function.
 
 ```ante
-Flip = effect
+effect Flip with
     flip: unit -> bool
 
 calculation () =
@@ -1866,7 +1847,7 @@ calculation () =
         else 4.0
     else 1.0
 
-expected_value (f: unit -> f64 can Flip) -> f64 =
+expected_value (f: unit -> f64 with Flip) -> f64 =
     handle f ()
     | flip () -> (resume true + resume false) / 2.0
 
@@ -1881,11 +1862,11 @@ and parenthesized expressions. This example was adapted from
 [this koka paper](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/08/algeff-tr-2016-v2.pdf).
 
 ```ante
-Repeat = effect
+effect Repeat with
     flip: unit -> bool
     fail: unit -> a
 
-Parse = effect
+effect Parse with
     // The parameter to Satisfy is a function which takes
     // our current input and returns a pair of
     // (result, rest_of_input) on success, or None on failure.
@@ -1894,7 +1875,7 @@ Parse = effect
 choice p1 p2 =
     if flip () then p1 () else p2 ()
 
-many (p: unit -> a can Repeat) -> List a can Repeat =
+many (p: unit -> a with Repeat) -> List a with Repeat =
     choice (fn () -> many1 p)
            (fn () -> Nil)
 
@@ -1902,15 +1883,15 @@ many1 p = Cons (p ()) (many p)
 
 
 // Return all possible solutions from the given computation
-solutions (unit -> a can Repeat) -> List a =
-    handle a ()
+solutions (f: unit -> a with Repeat) -> List a =
+    handle f ()
     | return x -> [x]
     | fail () -> []
     | flip () -> resume false ++ resume true
 
 // Return the first succeeding computation (taking the false Flip branch first)
-eager (unit -> a can Repeat) -> Maybe a =
-    handle a ()
+eager (f: unit -> a with Repeat) -> Maybe a =
+    handle f ()
     | return x -> Some x
     | fail () -> None
     | flip () ->
@@ -1919,22 +1900,22 @@ eager (unit -> a can Repeat) -> Maybe a =
         | None -> resume true
 
 // Handle any Parse effects (letting Repeat effects pass through)
-parse (input: string) (f: unit -> a can Parse, Repeat) -> a, string can Repeat =
+parse (input: string) (f: unit -> a with Parse, Repeat) -> a, string with Repeat =
     handle f ()
     | return x -> x, input
     | satisfy p ->
         match p input
         | None -> fail ()
-        | Some (x, rest) -> parse rest $$ resume x
+        | Some (x, rest) -> resume x with parse rest
 
 // These will be our parsing primitives
-symbol (c: char) -> char can Parse =
+symbol (c: char) -> char with Parse =
     satisfy fn input ->
         match input
         | Cons x rest if x == c -> Some (c, rest)
         | _ -> None
 
-digit () -> Int can Parse =
+digit () -> Int with Parse =
     satisfy fn input ->
         match input
         | Cons d rest if is_digit d -> Some (int (d - '0'), rest)
@@ -1943,7 +1924,7 @@ digit () -> Int can Parse =
 number () =
     many1 digit .foldl 0 fn acc d -> 10 * acc + d
 
-// Now our actual parser can begin in proper:
+// Now our actual parser with begin in proper:
 binop sym op f =
     a = f ()
     symbol sym
@@ -1956,17 +1937,17 @@ mul () = binop '*' (*) factor
 expr () = choice add term
 term () = choice mul factor
 
-factor () -> Int can Parse, Repeat =
-    choice number $$
+factor () -> Int with Parse, Repeat =
+    choice number fn () ->
         symbol '('
         e = expr ()
         symbol ')'
         e
 
-solutions $$ parse expr "1+2*3"
+parse expr "1+2*3" with solutions
 //=> [(7, ""), (3, "*3"), (1, "+2*3")]
 
-eager $$ parse expr "1+2*3"
+parse expr "1+2*3" with eager
 //=> Some (7, "")
 ```
 

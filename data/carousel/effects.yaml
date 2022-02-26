@@ -3,7 +3,7 @@ title: "Algebraic Effects"
 description: >
     <div class="highlight-textalign-left"><pre class="center-align"><code class="language/ante" data-lang="ante"><span class="c1">// computing expected value from a function that takes a coin flip effect.</span>
 
-    <span class="kt">Flip</span> = <span class="k">effect</span>
+    <span class="k">effect</span> <span class="kt">Flip</span> <span class="k">with</span>
         flip: <span class="kt">unit</span> -> <span class="kt">bool</span>
 
     calculation () =
