@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, ci-test ]
   pull_request:
     branches: [ master ]
 
@@ -10,12 +10,55 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  linux:
+    name: Linux Build
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v2
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
+
+  windows:
+    name: Windows Build
+    runs-on: windows-2016
+    env:
+      BUILD_PROJECT: llvm
+      BUILD_MASTER: false
+      LLVM_VERSION: 13.0.0
+
+    strategy:
+      fail-fast: false
+      matrix:
+        CRT:
+        - msvcrt
+
+        TARGET_CPU:
+        - x86
+        - amd64
+
+        CONFIGURATION:
+        - Debug
+        - Release
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+
+    - name: Install
+      shell: cmd
+      run: |
+          call %GITHUB_WORKSPACE%\set-env.bat msvc15 ${{matrix.CRT}} ${{matrix.TARGET_CPU}} ${{matrix.CONFIGURATION}}
+          call %GITHUB_WORKSPACE%\install.bat
+    # -   name: Build and test
+    #     id: BUILD
+    #     shell: cmd
+    #     run: |
+    #         call %GITHUB_WORKSPACE%\set-env.bat msvc15 ${{matrix.CRT}} ${{matrix.TARGET_CPU}} ${{matrix.CONFIGURATION}}
+    #         call %GITHUB_WORKSPACE%\build.bat
+    #         echo ::set-output name=DEPLOY_FILE::%DEPLOY_FILE%
     - name: Build
       run: cargo build --verbose
     - name: Run tests
