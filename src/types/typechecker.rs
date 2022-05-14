@@ -899,7 +899,7 @@ pub fn infer_ast<'a>(ast: &mut ast::Ast<'a>, cache: &mut ModuleCache<'a>) {
 
     let exposed_traits = traitchecker::resolve_traits(traits, &[], cache);
     // No traits should be propogated above the top-level main function
-    assert!(exposed_traits.is_empty());
+    assert_eq!(exposed_traits, vec![]);
 }
 
 pub fn infer<'a, T>(ast: &mut T, cache: &mut ModuleCache<'a>) -> (Type, TraitConstraints)
